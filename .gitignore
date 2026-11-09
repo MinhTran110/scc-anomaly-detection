@@ -48,3 +48,7 @@ Thumbs.db
 
 # Streamlit runtime
 .streamlit/secrets.toml
+
+# Technical Specification Documents (Keep local, exclude from repo)
+Đặc tả hệ thống SCC Outbound.docx
+Đặc tả hệ thống SCC Outbound.pdf
