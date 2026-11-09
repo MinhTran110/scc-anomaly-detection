@@ -77,7 +77,7 @@ Các thư viện được khóa phiên bản chính xác trong [`requirements.tx
 | Cấp độ | Tên sự cố | Điều kiện kích hoạt | Nguyên nhân cốt lõi | Hành động trực ban (SOP) |
 | :---: | :--- | :--- | :--- | :--- |
 | **🔴 P1** | **Sập Lưu Lượng PBX** | $calls\_total = 0$ VÀ $\mu_h \ge 2.5$ | Tổng đài sập nguồn, kẹt hàng đợi quay số, đứt cáp truyền dẫn. | 1. Kiểm tra container tổng đài PBX.<br>2. Khởi động lại tiến trình auto-dialer.<br>3. Kiểm tra kết nối mạng nội bộ. |
-| **🔴 P1** | **Lỗi Hạ Tầng SIP Trunk** | $\text{ErrorRate} \ge \text{Wilson Threshold}$<br>VÀ $N \ge 4$ VÀ $\text{Lỗi}_{503} \ge 2$ | Nhà mạng viễn thông từ chối kết nối SIP 503, quá tải Gateway. | 1. Xác định nhà mạng bị sự cố (VNPT/Viettel/Mobi).<br>2. Chuyển hướng sang Trunk dự phòng (Failover).<br>3. Báo sự cố khẩn cấp cho nhà mạng. |
+| **🔴 P1** | **Lỗi Hạ Tầng SIP Trunk** | $\text{ErrorRate} \ge \text{Wilson Threshold}$<br>VÀ $N \ge 4$ VÀ $\text{Lỗi}_{503} \ge 2$ | Nhà mạng viễn thông từ chối kết nối SIP 503, quá tải Gateway. | 1. Xác định nhà mạng bị sự cố.<br>2. Chuyển hướng sang Trunk dự phòng (Failover).<br>3. Báo sự cố khẩn cấp cho nhà mạng. |
 | **🟡 P2** | **Đột Biến Tải Chiến Dịch** | $N \ge \text{Upper Limit}$ HOẶC<br>($Z \ge 2.0$ VÀ $N \ge 7$) HOẶC $N \ge 9$ | Chiến dịch Telesales xả cuộc gọi ồ ạt, dialer bị lặp vòng vô hạn. | 1. Yêu cầu Telesales giảm tốc độ quay số (pacing rate).<br>2. Giám sát tải CPU/RAM máy chủ PBX. |
 | **🟢 Normal** | **Bình Thường** | Các chỉ số nằm trong dải an toàn | Hệ thống vận hành ổn định trong tầm kiểm soát. | Tiếp tục duy trì giám sát tự động. |
 
