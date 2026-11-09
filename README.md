@@ -91,10 +91,9 @@ scc-outbound-timeseries/
 ├── Dockerfile                      # Image build Python 3.11-slim
 ├── requirements.txt                # Thư viện phụ thuộc khóa phiên bản chính xác
 ├── .env.example                    # Mẫu biến môi trường an toàn (DB, Telegram, Ports)
-├── .gitignore                      # Loại trừ file bí mật và file rác
+├── .gitignore                      # Loại trừ file bí mật và file sinh tự động
 ├── timeseries.sql                  # Script SQL tạo bảng chuỗi 15-phút, UPSERT & Zero-filling
 ├── export_call_timeseries.sql      # Script trích xuất và đối soát dữ liệu chuỗi thời gian
-├── presentation.html               # Slide báo cáo tương tác 11 slides chuẩn kỹ thuật
 │
 ├── anomaly_detection_python/       # Module cốt lõi phân tích bất thường & AI
 │   ├── baseline_profile.json       # Tham số Baseline 24h & Bayesian Prior
@@ -105,15 +104,15 @@ scc-outbound-timeseries/
 │   ├── dashboard_monitor.py        # Streamlit Web Dashboard 3 Tab giám sát NOC
 │   ├── telegram_notifier.py        # Module gửi tin nhắn & ảnh báo cáo qua Telegram API
 │   └── data/                       # Dữ liệu đệm và lưu vết báo cáo đã gửi
-│       ├── baseline_profile.json
-│       ├── exported_reports.json
-│       └── stream_buffer.csv
+│       ├── call_timeseries.csv
+│       ├── seed_historical_stream.csv
+│       ├── stream_buffer.csv
+│       └── exported_reports.json
 │
-└── assets/                         # Ảnh chụp giao diện dashboard và telegram demo
-    ├── demo_dashboard_tab1.png     # Tab 1: Giám sát trực tiếp
-    ├── demo_dashboard_tab2.png     # Tab 2: Phân tích xu hướng 24h
-    ├── demo_dashboard_tab3.png     # Tab 3: Báo cáo tổng hợp đa ngày
-    └── telegram_report_demo.png    # Mẫu báo cáo tự động Telegram 17:30
+└── data/                           # Dữ liệu lịch sử phục vụ baseline & đối soát
+    ├── outbound_calls_timeseries_hourly_may.csv
+    ├── outbound_calls_timeseries_daily_full.csv
+    └── calls_raw.csv
 ```
 
 ---
