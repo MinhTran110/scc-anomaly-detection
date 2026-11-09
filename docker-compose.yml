@@ -1,0 +1,83 @@
+services:
+  # 1. Message Broker: Redis Stream (non-blocking, chống file lock)
+  redis:
+    image: redis:7.2-alpine
+    container_name: scc_redis
+    ports:
+      - "6380:6379"
+    restart: always
+    volumes:
+      - redis_data:/data
+
+  # 2. Cơ sở dữ liệu: PostgreSQL lưu trữ Time-Series
+  db:
+    image: postgres:16-alpine
+    container_name: scc_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: scc_calls
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./timeseries.sql:/docker-entrypoint-initdb.d/init.sql
+
+  # 3. Streamlit Real-time Anomaly Monitor Dashboard
+  dashboard:
+    image: scc_test_app:latest
+    container_name: scc_dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=scc_calls
+      - DB_USER=postgres
+      - DB_PASSWORD=postgrespassword
+      - HTTP_PROXY=http://proxy.fpt.vn:80
+      - HTTPS_PROXY=http://proxy.fpt.vn:80
+      - NO_PROXY=localhost,127.0.0.1,redis,db
+    depends_on:
+      - redis
+      - db
+    volumes:
+      - ./anomaly_detection_python:/app/anomaly_detection_python
+      - ./.streamlit:/app/.streamlit
+      - ./.streamlit:/root/.streamlit
+    restart: always
+
+  # 4. Mock Call Generator (Producer đẩy dữ liệu vào Redis Stream & PostgreSQL)
+  producer:
+    image: scc_test_app:latest
+    container_name: scc_producer
+    command: ["python", "anomaly_detection_python/producer.py"]
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=scc_calls
+      - DB_USER=postgres
+      - DB_PASSWORD=postgrespassword
+      - HTTP_PROXY=http://proxy.fpt.vn:80
+      - HTTPS_PROXY=http://proxy.fpt.vn:80
+      - NO_PROXY=localhost,127.0.0.1,redis,db
+    depends_on:
+      - redis
+      - db
+    volumes:
+      - ./anomaly_detection_python:/app/anomaly_detection_python
+      - ./.env:/app/.env
+    restart: always
+
+volumes:
+  redis_data:
+  postgres_data:

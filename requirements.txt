@@ -1,0 +1,16 @@
+# requirements.txt
+# Khóa cứng các phiên bản thư viện (Pinned Versions) để đảm bảo tính tái lập (Reproducible Builds)
+# và tránh phá vỡ giao diện API (Breaking Changes) trên môi trường Production Linux Container.
+
+streamlit==1.32.2
+pandas==2.2.1
+numpy==1.26.4
+matplotlib==3.8.3
+scikit-learn==1.4.1.post1
+redis==5.0.3
+requests==2.31.0
+sqlalchemy==2.0.28
+psycopg2-binary==2.9.9
+Pillow==10.2.0
+python-dateutil==2.9.0.post0
+plotly==5.24.1
