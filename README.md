@@ -27,9 +27,9 @@ flowchart LR
 1. **Thu thập CDR thời gian thực:** Cuộc gọi phát sinh từ tổng đài SCC được bắn tức thì vào **Redis Stream** (`scc_call_stream`) qua cơ chế non-blocking, giải phóng I/O và không làm nghẽn tổng đài.
 2. **Ghi nhận & Tổng hợp chuỗi thời gian:** `db_writer.py` đọc batch nạp vào bảng thô `calls_stream`. Định kỳ 15 phút, câu lệnh SQL thực hiện **Idempotent UPSERT** sang bảng `call_timeseries` kết hợp **Zero-imputation** bằng `generate_series()` để đảm bảo lưới thời gian liên tục 100%, không bị thủng lỗ khung rỗng.
 3. **Phân tích & Quét ngưỡng bất thường:** Engine `daily_reporter.py` quét dữ liệu mỗi chu kỳ:
-   - *Bộ lọc rỗng:* $V = 0$ trong giờ làm việc ($\mu \ge 2.5$) $\rightarrow$ Phát hiện **🔴 P1 Sập PBX**.
-   - *Sàn bảo vệ mẫu:* Khi $N \ge 4$ và Lỗi $\ge 2$, tính ngưỡng động **Wilson Score Interval 95%** ($z=1.96$) + làm mịn Bayes $\rightarrow$ Phát hiện **🔴 P1 Lỗi SIP Trunk**.
-   - *Thể tích động:* So sánh thể tích $V$ với dải lịch sử $\mu_h \pm 2.5\sigma_h$ $\rightarrow$ Phát hiện **🟡 P2 Đột Biến Tải**.
+   - *Bộ lọc rỗng:* $V = 0$ trong giờ làm việc ($\mu_h \ge 2.5$) $\rightarrow$ Phát hiện **🔴 P1 Sập PBX**.
+   - *Ngưỡng động & Sàn Bayes:* Tính ngưỡng động **Wilson Score Interval 95%** ($z=1.96$) kết hợp **sàn lọc mẫu từ tiên nghiệm Bayes** ($N \ge 4$ và $\text{Lỗi}_{503} \ge 2$) $\rightarrow$ Triệt tiêu báo động giả ở cỡ mẫu nhỏ, phát hiện **🔴 P1 Lỗi SIP Trunk**.
+   - *Thể tích động:* So sánh thể tích $V$ với dải lịch sử chu kỳ 24h $\mu_h \pm 2.5\sigma_h$ (hoặc $Z \ge 2.0$) $\rightarrow$ Phát hiện **🟡 P2 Đột Biến Tải**.
 4. **Cảnh báo tức thời & Trực quan hóa:**
    - Kích hoạt **Telegram Bot** gửi thông báo khẩn cấp (HTML + SOP xử lý) và tự động xuất biểu đồ tổng kết ngày lúc **17:30**.
    - Đồng bộ trạng thái lên **Streamlit NOC Dashboard** phục vụ trực ban theo dõi trực quan 24/7.
@@ -43,9 +43,9 @@ flowchart LR
 | **Event Generator** | `producer.py` | Giả lập luồng cuộc gọi CDR thực tế theo 38 khung giờ làm việc; mô phỏng các kịch bản sự cố viễn thông (P1 Sập PBX, P1 Nghẽn Trunk 503, P2 Đột biến tải). |
 | **Message Broker** | `stream_engine.py` / `scc_redis` | Đệm sự kiện qua Redis Stream (`scc_call_stream`), hỗ trợ cơ chế Consumer Group đảm bảo không thất thoát dữ liệu khi lưu lượng tăng đột biến. |
 | **Storage & Ingestion** | `db_writer.py` / `scc_postgres` | Ghi dữ liệu thô vào `calls_stream` (Partitioning theo tháng) và tự động UPSERT dữ liệu chuỗi thời gian 15-phút vào `call_timeseries`. |
-| **Baseline Calibration** | `ml_baseline_trainer.py` | Phân tích chu kỳ theo giờ từ dữ liệu lịch sử, áp dụng mô hình Isolation Forest lọc ngoại lai và xuất hồ sơ động `baseline_profile.json`. |
-| **Analytics Engine** | `daily_reporter.py` | Trái tim toán học của hệ thống: Tính toán kiểm định Wilson Score 95% ($z=1.96$), Bayesian Beta-Binomial prior và dải phân phối thể tích động 2.5$\sigma$. |
-| **Profile & Calibration** | `baseline_profile.json` | Lưu trữ hồ sơ Baseline 24 giờ ($\mu_h, \sigma_h$, Upper/Lower Limits) và tham số tiên nghiệm Bayes ($\alpha=0.4, \beta=19.6, p_0=0.02$). |
+| **Baseline Calibration** | `ml_baseline_trainer.py` | Phân tích chu kỳ ngày 24h theo từng giờ từ dữ liệu lịch sử, áp dụng mô hình Isolation Forest lọc dữ liệu ngoại lai và xuất hồ sơ chuẩn `baseline_profile.json`. |
+| **Analytics Engine** | `daily_reporter.py` | Trái tim toán học: Quét ngưỡng động Wilson Score 95% ($z=1.96$), áp dụng sàn lọc mẫu Bayes ($N \ge 4, \text{lỗi} \ge 2$) và dải phân phối thể tích động 2.5$\sigma$. |
+| **Profile & Calibration** | `baseline_profile.json` | Lưu trữ hồ sơ dải kỳ vọng 24 giờ ($\mu_h, \sigma_h$, Upper/Lower Limits) và tham số tiên nghiệm Bayes ($p_0=0.02, \text{sàn mẫu } N \ge 4, \text{lỗi} \ge 2$). |
 | **NOC Dashboard** | `dashboard_monitor.py` | Giao diện Web Streamlit 3 Tab (Tab 1: Giám sát trực tiếp; Tab 2: Phân tích xu hướng chu kỳ 24h; Tab 3: Báo cáo đối soát đa ngày). |
 | **Alerting Bot** | `telegram_notifier.py` | Kênh thông báo tức thời 24/7 qua Telegram Webhook; tự động xuất biểu đồ phân tích 3 phần gửi lúc 17:30 kèm cơ chế chống gửi lặp `exported_reports.json`. |
 | **Reverse Proxy** | `scc_nginx` | Điều phối traffic truy cập web dashboard, ẩn cổng nội bộ, mã hóa kết nối và hỗ trợ chuyển tiếp WebSocket cho Streamlit. |
@@ -78,7 +78,7 @@ Các thư viện được khóa phiên bản chính xác trong [`requirements.tx
 | Cấp độ | Tên sự cố | Điều kiện kích hoạt | Nguyên nhân cốt lõi | Hành động trực ban (SOP) |
 | :---: | :--- | :--- | :--- | :--- |
 | **🔴 P1** | **Sập Lưu Lượng PBX** | $calls\_total = 0$ VÀ $\mu_h \ge 2.5$ | Tổng đài sập nguồn, kẹt hàng đợi quay số, đứt cáp truyền dẫn. | 1. Kiểm tra container tổng đài PBX.<br>2. Khởi động lại tiến trình auto-dialer.<br>3. Kiểm tra kết nối mạng nội bộ. |
-| **🔴 P1** | **Lỗi Hạ Tầng SIP Trunk** | $\text{ErrorRate} \ge \text{Wilson Threshold}$<br>VÀ $N \ge 4$ VÀ $\text{Lỗi}_{503} \ge 2$ | Nhà mạng viễn thông từ chối kết nối SIP 503, quá tải Gateway. | 1. Xác định nhà mạng bị sự cố.<br>2. Chuyển hướng sang Trunk dự phòng (Failover).<br>3. Báo sự cố khẩn cấp cho nhà mạng. |
+| **🔴 P1** | **Lỗi Hạ Tầng SIP Trunk** | $\text{ErrorRate} \ge \text{Wilson Threshold}_{95\%}$<br>VÀ $N \ge 4$ VÀ $\text{Lỗi}_{503} \ge 2$ | Nhà mạng viễn thông từ chối kết nối SIP 503, quá tải Gateway. | 1. Xác định nhà mạng bị sự cố.<br>2. Chuyển hướng sang Trunk dự phòng (Failover).<br>3. Báo sự cố khẩn cấp cho nhà mạng. |
 | **🟡 P2** | **Đột Biến Tải Chiến Dịch** | $N \ge \text{Upper Limit}$ HOẶC<br>($Z \ge 2.0$ VÀ $N \ge 7$) HOẶC $N \ge 9$ | Chiến dịch Telesales xả cuộc gọi ồ ạt, dialer bị lặp vòng vô hạn. | 1. Yêu cầu Telesales giảm tốc độ quay số (pacing rate).<br>2. Giám sát tải CPU/RAM máy chủ PBX. |
 | **🟢 Normal** | **Bình Thường** | Các chỉ số nằm trong dải an toàn | Hệ thống vận hành ổn định trong tầm kiểm soát. | Tiếp tục duy trì giám sát tự động. |
 
