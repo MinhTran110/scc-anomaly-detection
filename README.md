@@ -48,7 +48,6 @@ flowchart LR
 | **Profile & Calibration** | `baseline_profile.json` | Lưu trữ hồ sơ dải kỳ vọng 24 giờ ($\mu_h, \sigma_h$, Upper/Lower Limits) và tham số tiên nghiệm Bayes ($p_0=0.02, \text{sàn mẫu } N \ge 4, \text{lỗi} \ge 2$). |
 | **NOC Dashboard** | `dashboard_monitor.py` | Giao diện Web Streamlit 3 Tab (Tab 1: Giám sát trực tiếp; Tab 2: Phân tích xu hướng chu kỳ 24h; Tab 3: Báo cáo đối soát đa ngày). |
 | **Alerting Bot** | `telegram_notifier.py` | Kênh thông báo tức thời 24/7 qua Telegram Webhook; tự động xuất biểu đồ phân tích 3 phần gửi lúc 17:30 kèm cơ chế chống gửi lặp `exported_reports.json`. |
-| **Reverse Proxy** | `scc_nginx` | Điều phối traffic truy cập web dashboard, ẩn cổng nội bộ, mã hóa kết nối và hỗ trợ chuyển tiếp WebSocket cho Streamlit. |
 
 ---
 

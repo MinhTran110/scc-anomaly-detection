@@ -1,13 +1,33 @@
 # telegram_notifier.py
+import os
 import requests
 from pathlib import Path
 
-# Cấu hình Token và Chat ID của bạn ở đây
-TELEGRAM_BOT_TOKEN = "8766045148:AAGDiMEkFpS4fZeshHZfMmctwdBXrFnwldc"
-TELEGRAM_CHAT_IDS = ["-5321779393", "8112925591"]
+# Nạp cấu hình từ biến môi trường hoặc file .env nếu có
+def _load_env():
+    if os.getenv("TELEGRAM_BOT_TOKEN"):
+        return
+    for path in [Path(".env"), Path(__file__).resolve().parent.parent / ".env", Path(__file__).resolve().parent / ".env"]:
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k, v = k.strip(), v.strip()
+                        if k not in os.environ:
+                            os.environ[k] = v
+            break
+
+_load_env()
+
+# Cấu hình Token và Chat ID lấy từ biến môi trường
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+raw_chat_ids = os.getenv("TELEGRAM_CHAT_IDS", "")
+TELEGRAM_CHAT_IDS = [cid.strip() for cid in raw_chat_ids.split(",") if cid.strip()] if raw_chat_ids else []
 TELEGRAM_PROXIES = {
-    "http": "http://proxy.fpt.vn:80",
-    "https": "http://proxy.fpt.vn:80"
+    "http": os.getenv("HTTP_PROXY", "http://proxy.fpt.vn:80"),
+    "https": os.getenv("HTTPS_PROXY", "http://proxy.fpt.vn:80")
 }
 
 def send_telegram_message(message: str):

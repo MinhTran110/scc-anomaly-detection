@@ -10,6 +10,7 @@ Phiên bản 3.1:
 4. Mở trang tức thì (< 0.5s), hiệu năng cao.
 """
 import sys
+import os
 import time
 import json
 from pathlib import Path
@@ -326,11 +327,29 @@ from daily_reporter import (
 # ==============================================================================
 # 1. CẤU HÌNH BOT TELEGRAM
 # ==============================================================================
-TELEGRAM_BOT_TOKEN = "8766045148:AAGDiMEkFpS4fZeshHZfMmctwdBXrFnwldc"
-TELEGRAM_CHAT_IDS = ["-5321779393", "8112925591"]
+def _load_env_dashboard():
+    if os.getenv("TELEGRAM_BOT_TOKEN"):
+        return
+    for p in [Path(".env"), Path(__file__).resolve().parent.parent / ".env", Path(__file__).resolve().parent / ".env"]:
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k, v = k.strip(), v.strip()
+                        if k not in os.environ:
+                            os.environ[k] = v
+            break
+
+_load_env_dashboard()
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+raw_chat_ids = os.getenv("TELEGRAM_CHAT_IDS", "")
+TELEGRAM_CHAT_IDS = [cid.strip() for cid in raw_chat_ids.split(",") if cid.strip()] if raw_chat_ids else []
 TELEGRAM_PROXIES = {
-    "http": "http://proxy.fpt.vn:80",
-    "https": "http://proxy.fpt.vn:80"
+    "http": os.getenv("HTTP_PROXY", "http://proxy.fpt.vn:80"),
+    "https": os.getenv("HTTPS_PROXY", "http://proxy.fpt.vn:80")
 }
 
 def send_telegram_msg(text: str):

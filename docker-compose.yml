@@ -30,6 +30,8 @@ services:
     container_name: scc_dashboard
     ports:
       - "8501:8501"
+    env_file:
+      - .env
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -46,6 +48,7 @@ services:
       - db
     volumes:
       - ./anomaly_detection_python:/app/anomaly_detection_python
+      - ./.env:/app/.env
       - ./.streamlit:/app/.streamlit
       - ./.streamlit:/root/.streamlit
     restart: always
