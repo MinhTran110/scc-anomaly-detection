@@ -85,24 +85,58 @@ def process_single_date(df_date, the_date, is_live_today: bool = False, active_b
     else:
         completed_data = df_date.copy()
 
+    SYSTEM_ERRORS = {"503_CONGESTION", "500_SERVER_ERROR", "504_GATEWAY_TIMEOUT", "429_TOO_MANY_REQUESTS", "408_REQUEST_TIMEOUT"}
+
     if completed_data.empty:
         ts = full_day_grid.copy()
         ts["calls_total"] = 0
         ts["calls_503"] = 0
+        ts["calls_failed"] = 0
         ts["calls_answered"] = 0
         ts["avg_duration"] = 0.0
+        ts["failed_carrier"] = "-"
+        ts["specific_error"] = "-"
     else:
         if "bucket_time" not in completed_data.columns:
             completed_data["start_time"] = pd.to_datetime(completed_data["start_time"])
             completed_data["bucket_time"] = completed_data["start_time"].dt.floor("15min")
             
-        agg = completed_data.groupby("bucket_time").agg(
+        agg_main = completed_data.groupby("bucket_time").agg(
             calls_total=("call_id", "count"),
-            calls_503=("result_code", lambda s: (s == "503_CONGESTION").sum()),
             calls_answered=("result_code", lambda s: (s == "ANSWERED").sum()),
             avg_duration=("duration", "mean")
         ).reset_index()
-        ts = pd.merge(full_day_grid, agg, on="bucket_time", how="left").fillna(0)
+
+        err_data = completed_data[completed_data["result_code"].isin(SYSTEM_ERRORS)]
+        if not err_data.empty:
+            def _most_freq(s):
+                m = s.dropna()
+                return m.mode().iloc[0] if not m.empty else "-"
+            agg_err = err_data.groupby("bucket_time").agg(
+                calls_failed=("call_id", "count"),
+                failed_carrier=("carrier", _most_freq) if "carrier" in err_data.columns else ("call_id", lambda _: "-"),
+                specific_error=("result_code", _most_freq)
+            ).reset_index()
+            agg = pd.merge(agg_main, agg_err, on="bucket_time", how="left")
+        else:
+            agg = agg_main
+            agg["calls_failed"] = 0
+            agg["failed_carrier"] = "-"
+            agg["specific_error"] = "-"
+
+        agg["calls_failed"] = agg["calls_failed"].fillna(0).astype(int)
+        agg["calls_503"] = agg["calls_failed"]
+        agg["failed_carrier"] = agg["failed_carrier"].fillna("-")
+        agg["specific_error"] = agg["specific_error"].fillna("-")
+        
+        ts = pd.merge(full_day_grid, agg, on="bucket_time", how="left")
+        ts["calls_total"] = ts["calls_total"].fillna(0).astype(int)
+        ts["calls_503"] = ts["calls_503"].fillna(0).astype(int)
+        ts["calls_failed"] = ts["calls_failed"].fillna(0).astype(int)
+        ts["calls_answered"] = ts["calls_answered"].fillna(0).astype(int)
+        ts["avg_duration"] = ts["avg_duration"].fillna(0.0)
+        ts["failed_carrier"] = ts["failed_carrier"].fillna("-")
+        ts["specific_error"] = ts["specific_error"].fillna("-")
 
     ts["hour"] = ts["bucket_time"].dt.hour
     ts["mu"] = ts["hour"].map(lambda h: HOURLY_PROFILE.get(str(h), {}).get("mu", 4.0))
@@ -116,17 +150,17 @@ def process_single_date(df_date, the_date, is_live_today: bool = False, active_b
         ts["is_completed"] = True
 
     # Tỷ lệ lỗi thực tế (Empirical Error Rate)
-    ts["error_rate"] = np.where(ts["calls_total"] > 0, ts["calls_503"] / ts["calls_total"], 0.0)
+    ts["error_rate"] = np.where(ts["calls_total"] > 0, ts["calls_failed"] / ts["calls_total"], 0.0)
     ts["smoothed_error_rate"] = ts["error_rate"]
     ts["dynamic_threshold"] = ts["calls_total"].apply(compute_dynamic_error_threshold)
     ts["zscore"] = np.where(ts["sd"] > 0, (ts["calls_total"] - ts["mu"]) / ts["sd"], 0.0).round(2)
 
-    # 1. P1 Lỗi hạ tầng SIP Trunk: Tỷ lệ lỗi >= Ngưỡng động VÀ có ít nhất 2 cuộc lỗi (hiển thị trên Đồ thị 2)
+    # 1. P1 Lỗi hạ tầng viễn thông: Tỷ lệ lỗi >= Ngưỡng động VÀ có ít nhất 2 cuộc lỗi (hiển thị trên Đồ thị 2)
     ts["is_p1_net"] = (
         ts["is_completed"] & 
         (ts["error_rate"] >= ts["dynamic_threshold"]) & 
         (ts["calls_total"] >= 4) & 
-        (ts["calls_503"] >= 2)
+        (ts["calls_failed"] >= 2)
     )
 
     # 2. P1 Sập lưu lượng PBX: Lưu lượng rơi về 0 trong giờ làm việc (mu >= 2.5) (hiển thị trên Đồ thị 1)
@@ -171,7 +205,7 @@ def generate_daily_report_chart(day_date, day_ts: pd.DataFrame, report_file: Pat
     summary_text = (
         f"================ BÁO CÁO TỔNG KẾT VẬN HÀNH SCC OUTBOUND: {date_str} (08:00 - 17:30) ================\n\n"
         f"  • Tổng cuộc gọi phát sinh : {tot_calls:,} cuộc            • Kết nối thành công (Nghe máy): {conn_pct:.1f}% ({tot_conn:,} cuộc)\n"
-        f"  • Lỗi gián đoạn viễn thông : {tot_503:,} cuộc (503)      • Tỷ lệ lỗi toàn ngày          : {err_pct:.2f}%\n"
+        f"  • Lỗi gián đoạn viễn thông : {tot_503:,} cuộc             • Tỷ lệ lỗi toàn ngày          : {err_pct:.2f}%\n"
         f"  • Sự cố khẩn cấp PBX/SIP   : {tot_p1} khung giờ (P1 Khẩn)  • Cảnh báo tăng tải đột biến   : {tot_p2} khung giờ (P2 Cảnh Báo)"
     )
     box_color = "#fee2e2" if tot_p1 > 0 else "#f0fdf4"

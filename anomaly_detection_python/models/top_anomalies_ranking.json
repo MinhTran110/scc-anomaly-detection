@@ -1,0 +1,67 @@
+[
+  {
+    "rank": 1,
+    "bucket_time": "2027-01-05 09:15:00",
+    "anomaly_score": -0.0818,
+    "severity": "🟠 CẢNH BÁO (P2)",
+    "calls_total": 12,
+    "calls_failed": 1,
+    "error_rate_pct": 8.3,
+    "avg_duration": 46.6,
+    "carrier": "VIETTEL",
+    "specific_error": "503_CONGESTION",
+    "root_cause_explanation": "Quá tải lưu lượng (12 cuộc / 15p so với mức trung vị 2)"
+  },
+  {
+    "rank": 2,
+    "bucket_time": "2026-12-14 09:15:00",
+    "anomaly_score": -0.0781,
+    "severity": "🟠 CẢNH BÁO (P2)",
+    "calls_total": 13,
+    "calls_failed": 0,
+    "error_rate_pct": 0.0,
+    "avg_duration": 64.0,
+    "carrier": "-",
+    "specific_error": "-",
+    "root_cause_explanation": "Quá tải lưu lượng (13 cuộc / 15p so với mức trung vị 2)"
+  },
+  {
+    "rank": 3,
+    "bucket_time": "2026-12-16 15:00:00",
+    "anomaly_score": -0.0775,
+    "severity": "🟠 CẢNH BÁO (P2)",
+    "calls_total": 5,
+    "calls_failed": 4,
+    "error_rate_pct": 80.0,
+    "avg_duration": 5.8,
+    "carrier": "VIETTEL",
+    "specific_error": "503_CONGESTION",
+    "root_cause_explanation": "Tỷ lệ lỗi viễn thông vọt cao (80.0%, nhà mạng: VIETTEL, mã: 503_CONGESTION)"
+  },
+  {
+    "rank": 4,
+    "bucket_time": "2027-01-05 09:30:00",
+    "anomaly_score": -0.076,
+    "severity": "🟠 CẢNH BÁO (P2)",
+    "calls_total": 2,
+    "calls_failed": 1,
+    "error_rate_pct": 50.0,
+    "avg_duration": 87.5,
+    "carrier": "VIETTEL",
+    "specific_error": "503_CONGESTION",
+    "root_cause_explanation": "Tỷ lệ lỗi viễn thông vọt cao (50.0%, nhà mạng: VIETTEL, mã: 503_CONGESTION)"
+  },
+  {
+    "rank": 5,
+    "bucket_time": "2026-12-30 16:00:00",
+    "anomaly_score": -0.0713,
+    "severity": "🟠 CẢNH BÁO (P2)",
+    "calls_total": 11,
+    "calls_failed": 1,
+    "error_rate_pct": 9.1,
+    "avg_duration": 89.9,
+    "carrier": "VIETTEL",
+    "specific_error": "503_CONGESTION",
+    "root_cause_explanation": "Quá tải lưu lượng (11 cuộc / 15p so với mức trung vị 2)"
+  }
+]

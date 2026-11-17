@@ -28,6 +28,8 @@ from PIL import ImageFile
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
+SYSTEM_ERRORS = ["503_CONGESTION", "500_SERVER_ERROR", "504_GATEWAY_TIMEOUT", "429_TOO_MANY_REQUESTS", "408_REQUEST_TIMEOUT"]
+
 st.set_page_config(
     page_title="SCC Outbound - Realtime Anomaly & ML Monitor",
     page_icon="📞",
@@ -324,6 +326,13 @@ from daily_reporter import (
     MIN_SPIKE_VOLUME_FLOOR
 )
 
+# Khởi tạo Machine Learning Inference Engine
+try:
+    from ml_inference_engine import SCCAnomalyInferenceEngine
+    ML_ENGINE = SCCAnomalyInferenceEngine()
+except Exception:
+    ML_ENGINE = None
+
 # ==============================================================================
 # 1. CẤU HÌNH BOT TELEGRAM
 # ==============================================================================
@@ -526,8 +535,9 @@ def get_current_pipeline_state():
     else:
         active_bucket = pd.Timestamp(current_date).replace(hour=8, minute=0, second=0)
 
+    SYSTEM_ERRORS = ["503_CONGESTION", "500_SERVER_ERROR", "504_GATEWAY_TIMEOUT", "429_TOO_MANY_REQUESTS", "408_REQUEST_TIMEOUT"]
     ts_today = process_single_date(df_today, current_date, is_live_today=True, active_bucket=active_bucket)
-    today_bad_calls = df_today[df_today["result_code"] == "503_CONGESTION"].sort_values("start_time", ascending=False) if not df_today.empty else pd.DataFrame()
+    today_bad_calls = df_today[df_today["result_code"].isin(SYSTEM_ERRORS)].sort_values("start_time", ascending=False) if not df_today.empty else pd.DataFrame()
 
     return ts_today, today_bad_calls, current_date, past_days_summary, df_today, past_days_ts, df
 
@@ -646,25 +656,16 @@ def render_live_monitoring_fragment():
             active_ts = past_days_ts.get(view_date)
             if active_ts is None or active_ts.empty:
                 p_df = full_df[full_df["date"] == view_date].copy() if not full_df.empty else pd.DataFrame()
-                if not p_df.empty:
-                    active_ts = process_single_date(p_df, view_date, is_live_today=False)
-                    past_days_ts[view_date] = active_ts
+                active_ts = process_single_date(p_df, view_date, is_live_today=False)
+                past_days_ts[view_date] = active_ts
 
-            if active_ts is not None and not active_ts.empty:
-                completed_buckets = active_ts
-                latest_row = completed_buckets.iloc[-1]
-                active_time_str = "17:30 (Đã Chốt Toàn Ngày)"
-                is_p1 = False
-                is_p2 = False
-                df_view = full_df[full_df["date"] == view_date] if not full_df.empty else pd.DataFrame()
-                view_bad_calls = df_view[df_view["result_code"] == "503_CONGESTION"].sort_values("start_time", ascending=False) if not df_view.empty else pd.DataFrame()
-            else:
-                completed_buckets = pd.DataFrame()
-                active_time_str = "Không có cuộc gọi"
-                is_p1 = False
-                is_p2 = False
-                df_view = pd.DataFrame()
-                view_bad_calls = pd.DataFrame()
+            completed_buckets = active_ts
+            latest_row = completed_buckets.iloc[-1]
+            active_time_str = "17:30 (Đã Chốt Toàn Ngày)"
+            is_p1 = False
+            is_p2 = False
+            df_view = full_df[full_df["date"] == view_date] if not full_df.empty else pd.DataFrame()
+            view_bad_calls = df_view[df_view["result_code"].isin(SYSTEM_ERRORS)].sort_values("start_time", ascending=False) if not df_view.empty else pd.DataFrame()
 
     # METRICS KPI (4 THẺ TINH GỌN THEO YÊU CẦU: BỎ TIẾN ĐỘ CA TRỰC, RÚT GỌN TỶ LỆ GIÁN ĐOẠN)
     if completed_buckets is not None and not completed_buckets.empty:
@@ -724,6 +725,25 @@ def render_live_monitoring_fragment():
                         }}
                         tabFromUrlSwitched = true;
                     }}
+                }}
+            }} catch(e) {{}}
+        function bindTabClicks() {{
+            try {{
+                const tabs = pDoc.querySelectorAll('button[role="tab"]');
+                if (tabs && tabs.length >= 3) {{
+                    tabs.forEach((t, idx) => {{
+                        if (!t.__scc_click_tracked) {{
+                            t.__scc_click_tracked = true;
+                            t.addEventListener('click', () => {{
+                                tabFromUrlSwitched = true;
+                                try {{
+                                    const curUrl = new URL(pWin.location.href);
+                                    curUrl.searchParams.set('tab', idx + 1);
+                                    pWin.history.replaceState(null, '', curUrl.toString());
+                                }} catch(err) {{}}
+                            }});
+                        }}
+                    }});
                 }}
             }} catch(e) {{}}
         }}
@@ -870,9 +890,10 @@ def render_live_monitoring_fragment():
         }}
 
         setInterval(function() {{
+            bindTabClicks();
             checkAndSwitchUrlTab();
             fixCalendarDarkAndFooter();
-        }}, 120);
+        }}, 400);
     }})();
     </script>
     """, height=0, width=0)
@@ -1145,21 +1166,34 @@ def render_live_monitoring_fragment():
         flagged = completed_buckets[completed_buckets["is_p1_red"] | completed_buckets["is_p2_yellow"]].copy()
 
         if not flagged.empty:
-            def format_incident_desc(row):
-                items = []
-                if row["is_p1_net"]:
-                    items.append("Nghẽn mạng viễn thông (Không kết nối được)")
+            def get_failed_carrier_display(row):
+                fc = row.get("failed_carrier")
+                if pd.notna(fc) and str(fc).strip() and str(fc).strip() != "-":
+                    return str(fc).strip()
                 if row["is_p1_drop"]:
-                    items.append("Sập tín hiệu tổng đài (Cuộc gọi giảm sâu)")
+                    return "Tổng đài PBX"
                 if row["is_p2_yellow"]:
-                    items.append("Lưu lượng tăng đột biến (Cần thêm nhân sự)")
-                return " | ".join(items)
+                    return "Chiến dịch gọi"
+                return "-"
+
+            def get_specific_error_display(row):
+                se = row.get("specific_error")
+                if row["is_p1_net"] and pd.notna(se) and str(se).strip() and str(se).strip() != "-":
+                    return str(se)
+                if row["is_p1_drop"]:
+                    return "DROP_TRAFFIC (Sập lưu lượng)"
+                if row["is_p2_yellow"]:
+                    return "TRAFFIC_SPIKE (Tăng tải đột biến)"
+                return "503_CONGESTION" if row["is_p1_net"] else "-"
 
             def get_action_recommendation(row):
+                carrier = row.get("failed_carrier", "")
                 if row["is_p1_net"]:
+                    if pd.notna(carrier) and str(carrier).strip() and str(carrier).strip() != "-":
+                        return f"Chuyển hướng sang SIP Trunk dự phòng | Báo kỹ thuật NOC {carrier}"
                     return "Kiểm tra cổng kết nối nhà mạng và chuyển hướng sang đường truyền dự phòng"
                 elif row["is_p1_drop"]:
-                    return "Kiểm tra nguồn phát tổng đài và đường dây trung kế"
+                    return "Kiểm tra nguồn phát tổng đài Asterisk và đường dây trung kế"
                 elif row["is_p2_yellow"]:
                     return "Điều phối thêm điện thoại viên trực ca, theo dõi tải kênh gọi"
                 return "Theo dõi định kỳ"
@@ -1171,18 +1205,37 @@ def render_live_monitoring_fragment():
                     return "🟡 Cảnh báo"
                 return "🟢 Bình thường"
 
-            flagged["Hiện Tượng"] = flagged.apply(format_incident_desc, axis=1)
             flagged["Mức Độ"] = flagged.apply(get_risk_level, axis=1)
+            flagged["Bên Gặp Lỗi"] = flagged.apply(get_failed_carrier_display, axis=1)
+            flagged["Lỗi Cụ Thể"] = flagged.apply(get_specific_error_display, axis=1)
             flagged["Hướng Dẫn Xử Lý"] = flagged.apply(get_action_recommendation, axis=1)
 
             display_df = pd.DataFrame()
             display_df["Khung Giờ"] = flagged["bucket_time"].dt.strftime("%H:%M")
             display_df["Mức Độ"] = flagged["Mức Độ"]
-            display_df["Hiện Tượng Gặp Phải"] = flagged["Hiện Tượng"]
-            display_df["Tổng Số Cuộc"] = flagged["calls_total"].astype(int)
-            display_df["Số Cuộc Lỗi"] = flagged["calls_503"].astype(int)
-            display_df["Tỷ Lệ Bị Lỗi"] = (flagged["error_rate"] * 100).round(1).astype(str) + "%"
+            display_df["Bên Gặp Lỗi (Carrier)"] = flagged["Bên Gặp Lỗi"]
+            display_df["Tổng Cuộc / Cuộc Lỗi"] = flagged.apply(
+                lambda r: f"{int(r['calls_total'])} / {int(r['calls_503'])} ({r['error_rate']*100:.1f}%)" if r["calls_total"] > 0 else "0 / 0 (0%)",
+                axis=1
+            )
+            display_df["Lỗi Cụ Thể (Specific Error)"] = flagged["Lỗi Cụ Thể"]
             display_df["Ngưỡng Cho Phép"] = (flagged["dynamic_threshold"] * 100).round(1).astype(str) + "%"
+
+            if ML_ENGINE and ML_ENGINE.is_ready:
+                def get_ml_score_badge(r):
+                    res = ML_ENGINE.predict_bucket(
+                        calls_total=int(r["calls_total"]),
+                        calls_failed=int(r["calls_503"]),
+                        avg_duration=float(r.get("avg_duration", 0.0) if pd.notna(r.get("avg_duration")) else 0.0),
+                        hour=int(r["hour"]),
+                        dayofweek=int(r["bucket_time"].weekday()),
+                        failed_carrier=str(r.get("failed_carrier", "-")),
+                        specific_error=str(r.get("specific_error", "-"))
+                    )
+                    sc = res["anomaly_score"]
+                    return f"{sc:.4f}"
+                display_df["ML Score (iForest)"] = flagged.apply(get_ml_score_badge, axis=1)
+
             display_df["Hướng Dẫn Xử Lý Nhanh"] = flagged["Hướng Dẫn Xử Lý"]
 
             n_red = int(flagged["is_p1_red"].sum())
@@ -1204,8 +1257,24 @@ def render_live_monitoring_fragment():
         with st.expander("🔍 Tra cứu chi tiết từng mã cuộc gọi bị gián đoạn (Dành cho kỹ thuật viên)", expanded=False):
             if not view_bad_calls.empty:
                 st.caption(f"Danh sách {min(20, len(view_bad_calls))} cuộc gọi bị lỗi gần nhất:")
-                bad_display = view_bad_calls[["call_id", "start_time", "end_time", "duration"]].copy()
-                bad_display.columns = ["Mã Cuộc Gọi", "Thời Gian Bắt Đầu", "Thời Gian Kết Thúc", "Thời Lượng (Giây)"]
+                cols_available = ["call_id"]
+                col_names = ["Mã Cuộc Gọi"]
+                if "carrier" in view_bad_calls.columns:
+                    cols_available.append("carrier")
+                    col_names.append("Bên Gặp Lỗi (Carrier)")
+                if "result_code" in view_bad_calls.columns:
+                    cols_available.append("result_code")
+                    col_names.append("Lỗi Cụ Thể (Error Code)")
+                cols_available.append("start_time")
+                col_names.append("Thời Gian Bắt Đầu")
+                if "end_time" in view_bad_calls.columns:
+                    cols_available.append("end_time")
+                    col_names.append("Thời Gian Kết Thúc")
+                cols_available.append("duration")
+                col_names.append("Thời Lượng (Giây)")
+
+                bad_display = view_bad_calls[cols_available].copy()
+                bad_display.columns = col_names
                 st.dataframe(
                     bad_display.head(20),
                     use_container_width=True,
@@ -1416,459 +1485,454 @@ def render_live_monitoring_fragment():
 
         st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
-        # ---------------- TAB 3: EXECUTIVE OVERVIEW & MULTI-DAY ANALYTICS ----------------
-        with tab_executive_overview:
-            all_dates = sorted(full_df["date"].unique()) if not full_df.empty else []
+    with tab_executive_overview:
+        all_dates = sorted(full_df["date"].unique()) if not full_df.empty else []
 
-            st.markdown("### 📊 Báo Cáo Tổng Hợp Vận Hành (Executive Operational Summary)")
+        st.markdown("### 📊 Báo Cáo Tổng Hợp Vận Hành (Executive Operational Summary)")
 
-            # BỘ LỌC KHOẢNG NGÀY THEO LỊCH (TÍCH HỢP NÚT TỔNG HỢP TRỰC TIẾP TRONG LỊCH)
-            col_t3_date, _ = st.columns([1.4, 2.6])
-            with col_t3_date:
-                t3_range_default = (min_date, max_date)
-                raw_session_t3 = st.session_state.get("t3_date_range_picker", t3_range_default)
+        # BỘ LỌC KHOẢNG NGÀY THEO LỊCH (TÍCH HỢP NÚT TỔNG HỢP TRỰC TIẾP TRONG LỊCH)
+        col_t3_date, _ = st.columns([1.4, 2.6])
+        with col_t3_date:
+            t3_range_default = (min_date, max_date)
+            raw_session_t3 = st.session_state.get("t3_date_range_picker", t3_range_default)
 
-                def get_work_week(day_obj):
-                    if hasattr(day_obj, "date"): day_obj = day_obj.date()
-                    mon = day_obj - timedelta(days=day_obj.weekday())
-                    fri = mon + timedelta(days=4)
-                    return max(min_date, mon), min(max_date, fri)
+            def get_work_week(day_obj):
+                if hasattr(day_obj, "date"): day_obj = day_obj.date()
+                mon = day_obj - timedelta(days=day_obj.weekday())
+                fri = mon + timedelta(days=4)
+                return max(min_date, mon), min(max_date, fri)
 
-                if isinstance(raw_session_t3, (list, tuple)):
-                    if len(raw_session_t3) == 1:
-                        s_d, e_d = get_work_week(raw_session_t3[0])
-                        st.session_state["t3_date_range_picker"] = (s_d, e_d)
-                        t3_val = (s_d, e_d)
-                    elif len(raw_session_t3) == 2:
-                        v_start, v_end = raw_session_t3[0], raw_session_t3[1]
-                        if hasattr(v_start, "date"): v_start = v_start.date()
-                        if hasattr(v_end, "date"): v_end = v_end.date()
-                        if v_start > v_end: v_start, v_end = v_end, v_start
-                        if v_start < min_date: v_start = min_date
-                        if v_end > max_date: v_end = max_date
-                        t3_val = (v_start, v_end)
-                    else:
-                        t3_val = t3_range_default
-                else:
-                    s_d, e_d = get_work_week(raw_session_t3)
+            if isinstance(raw_session_t3, (list, tuple)):
+                if len(raw_session_t3) == 1:
+                    s_d, e_d = get_work_week(raw_session_t3[0])
+                    st.session_state["t3_date_range_picker"] = (s_d, e_d)
                     t3_val = (s_d, e_d)
-
-                t3_range_picked = st.date_input(
-                    "📅 Chọn khoảng ngày đối soát (Từ ngày – Đến ngày):",
-                    value=t3_val,
-                    min_value=min_date,
-                    max_value=max_date,
-                    format="YYYY-MM-DD",
-                    key="t3_date_range_picker",
-                    help="Bấm vào ngày thứ bất kỳ trong tuần để tự động chọn tuần đó (Thứ 2 – Thứ 6) hoặc bấm nút 'Tổng Hợp' dưới chân lịch để xem toàn bộ."
-                )
-
-            # Xử lý dải ngày được chọn
-            if isinstance(t3_range_picked, (list, tuple)):
-                if len(t3_range_picked) == 2:
-                    t3_start_d, t3_end_d = t3_range_picked[0], t3_range_picked[1]
-                elif len(t3_range_picked) == 1:
-                    t3_start_d, t3_end_d = get_work_week(t3_range_picked[0])
+                elif len(raw_session_t3) == 2:
+                    v_start, v_end = raw_session_t3[0], raw_session_t3[1]
+                    if hasattr(v_start, "date"): v_start = v_start.date()
+                    if hasattr(v_end, "date"): v_end = v_end.date()
+                    if v_start > v_end: v_start, v_end = v_end, v_start
+                    if v_start < min_date: v_start = min_date
+                    if v_end > max_date: v_end = max_date
+                    t3_val = (v_start, v_end)
                 else:
-                    t3_start_d, t3_end_d = min_date, max_date
+                    t3_val = t3_range_default
             else:
-                t3_start_d, t3_end_d = get_work_week(t3_range_picked)
+                s_d, e_d = get_work_week(raw_session_t3)
+                t3_val = (s_d, e_d)
 
-            if t3_start_d > t3_end_d:
-                t3_start_d, t3_end_d = t3_end_d, t3_start_d
+            t3_range_picked = st.date_input(
+                "📅 Chọn khoảng ngày đối soát (Từ ngày – Đến ngày):",
+                value=t3_val,
+                min_value=min_date,
+                max_value=max_date,
+                format="YYYY-MM-DD",
+                key="t3_date_range_picker",
+                help="Bấm vào ngày thứ bất kỳ trong tuần để tự động chọn tuần đó (Thứ 2 – Thứ 6) hoặc bấm nút 'Tổng Hợp' dưới chân lịch để xem toàn bộ."
+            )
 
-            # Callback & Nút trigger nội bộ (đã ẩn hoàn toàn qua CSS, chỉ kích hoạt khi bấm nút Tổng Hợp trong lịch)
-            def reset_t3_to_all_dates():
-                st.session_state["t3_date_range_picker"] = (min_date, max_date)
-
-            st.button("t3_hidden_tong_hop", key="btn_t3_tong_hop_hidden", on_click=reset_t3_to_all_dates)
-
-            is_view_all_active = (t3_start_d == min_date and t3_end_d == max_date)
-
-            # Lọc danh sách ngày và dữ liệu theo khoảng đã chọn, LOẠI TRỪ THỨ 7 VÀ CHỦ NHẬT (d.weekday() < 5)
-            filtered_dates = [d for d in all_dates if t3_start_d <= d <= t3_end_d and d.weekday() < 5]
-            df_t3 = full_df[full_df["date"].isin(filtered_dates)]
-            tot_all_calls = len(df_t3)
-
-            if is_view_all_active:
-                st.caption(f"Đang đối soát: **Toàn bộ dữ liệu vận hành ({t3_start_d.strftime('%d/%m/%Y')} ➔ {t3_end_d.strftime('%d/%m/%Y')})** — Gồm {len(filtered_dates)} ngày làm việc ({tot_all_calls:,} cuộc gọi).")
+        # Xử lý dải ngày được chọn
+        if isinstance(t3_range_picked, (list, tuple)):
+            if len(t3_range_picked) == 2:
+                t3_start_d, t3_end_d = t3_range_picked[0], t3_range_picked[1]
+            elif len(t3_range_picked) == 1:
+                t3_start_d, t3_end_d = get_work_week(t3_range_picked[0])
             else:
-                st.caption(f"Đang đối soát: **{t3_start_d.strftime('%d/%m/%Y')} ➔ {t3_end_d.strftime('%d/%m/%Y')}** (Thứ 2 – Thứ 6, trừ T7 & CN) — Gồm {len(filtered_dates)} ngày làm việc ({tot_all_calls:,} cuộc gọi).")
+                t3_start_d, t3_end_d = min_date, max_date
+        else:
+            t3_start_d, t3_end_d = get_work_week(t3_range_picked)
 
-            # 1. HỆ THỐNG HERO KPIS TÍCH LŨY
-            tot_all_503 = int((df_t3["result_code"] == "503_CONGESTION").sum()) if not df_t3.empty else 0
-            tot_all_ans = int((df_t3["result_code"] == "ANSWERED").sum()) if not df_t3.empty else 0
-            all_asr_pct = (tot_all_ans / tot_all_calls * 100) if tot_all_calls > 0 else 0.0
-            all_err_pct = (tot_all_503 / tot_all_calls * 100) if tot_all_calls > 0 else 0.0
-            all_acd_sec = float(df_t3[df_t3["result_code"] == "ANSWERED"]["duration"].mean()) if tot_all_ans > 0 else 0.0
+        if t3_start_d > t3_end_d:
+            t3_start_d, t3_end_d = t3_end_d, t3_start_d
 
-            tot_all_p1 = sum(int(past_days_ts[d]["is_p1_red"].sum()) for d in filtered_dates if d in past_days_ts)
-            tot_all_p2 = sum(int(past_days_ts[d]["is_p2_yellow"].sum()) for d in filtered_dates if d in past_days_ts)
-            if is_realtime_mode and current_date in filtered_dates and not completed_buckets.empty:
-                tot_all_p1 += int(completed_buckets["is_p1_red"].sum())
-                tot_all_p2 += int(completed_buckets["is_p2_yellow"].sum())
+        # Callback & Nút trigger nội bộ (đã ẩn hoàn toàn qua CSS, chỉ kích hoạt khi bấm nút Tổng Hợp trong lịch)
+        def reset_t3_to_all_dates():
+            st.session_state["t3_date_range_picker"] = (min_date, max_date)
 
-            tot_completed_buckets_all = sum(len(past_days_ts[d]) for d in filtered_dates if d in past_days_ts) + ((len(completed_buckets) if is_realtime_mode else 0) if current_date in filtered_dates else 0)
-            sla_compliance_pct = ((tot_completed_buckets_all - tot_all_p1) / tot_completed_buckets_all * 100) if tot_completed_buckets_all > 0 else 100.0
+        st.button("t3_hidden_tong_hop", key="btn_t3_tong_hop_hidden", on_click=reset_t3_to_all_dates)
 
-            # Hàng 1: 3 Card chính
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Tổng Lưu Lượng Cuộc Gọi", f"{tot_all_calls:,} cuộc", f"{len(filtered_dates)} ngày vận hành")
-            c2.metric("Tỷ Lệ Bắt Máy Thành Công (ASR)", f"{all_asr_pct:.1f}%", f"{tot_all_ans:,} cuộc nghe máy (Mục tiêu >= 50%)", delta_color="normal" if all_asr_pct >= 50 else "inverse")
-            c3.metric("Thời Lượng Đàm Thoại TB (ACD)", f"{all_acd_sec:.0f} giây", "Trung bình cuộc gọi Answered", delta_color="off")
+        is_view_all_active = (t3_start_d == min_date and t3_end_d == max_date)
 
-            # Hàng 2: 3 Card chỉ số chất lượng & rủi ro
-            c4, c5, c6 = st.columns(3)
-            c4.metric("Tỷ Lệ Lỗi Viễn Thông 503", f"{all_err_pct:.2f}%", f"{tot_all_503} lỗi (Mục tiêu SLA <= 5.0%)", delta_color="inverse" if all_err_pct > 5 else "normal")
-            c5.metric("Độ Khả Dụng Vận Hành (SLA)", f"{sla_compliance_pct:.1f}%", "Tỷ lệ khung giờ không có sự cố P1", delta_color="normal" if sla_compliance_pct >= 95 else "inverse")
-            c6.metric("Tổng Số Sự Cố Ghi Nhận", f"{tot_all_p1} P1  |  {tot_all_p2} P2", "P1 Lỗi mạng / P2 Đột biến tải", delta_color="off")
+        # Lọc danh sách ngày và dữ liệu theo khoảng đã chọn, LOẠI TRỪ THỨ 7 VÀ CHỦ NHẬT (d.weekday() < 5)
+        filtered_dates = [d for d in all_dates if t3_start_d <= d <= t3_end_d and d.weekday() < 5]
+        df_t3 = full_df[full_df["date"].isin(filtered_dates)]
+        tot_all_calls = len(df_t3)
 
-            st.markdown("---")
+        if is_view_all_active:
+            st.caption(f"Đang đối soát: **Toàn bộ dữ liệu vận hành ({t3_start_d.strftime('%d/%m/%Y')} ➔ {t3_end_d.strftime('%d/%m/%Y')})** — Gồm {len(filtered_dates)} ngày làm việc ({tot_all_calls:,} cuộc gọi).")
+        else:
+            st.caption(f"Đang đối soát: **{t3_start_d.strftime('%d/%m/%Y')} ➔ {t3_end_d.strftime('%d/%m/%Y')}** (Thứ 2 – Thứ 6, trừ T7 & CN) — Gồm {len(filtered_dates)} ngày làm việc ({tot_all_calls:,} cuộc gọi).")
 
-            # 2. BIỂU ĐỒ TRỰC QUAN ĐA NGÀY (CENTRAL ANALYTICS CHARTS)
+        # 1. HỆ THỐNG HERO KPIS TÍCH LŨY
+        tot_all_503 = int((df_t3["result_code"] == "503_CONGESTION").sum()) if not df_t3.empty else 0
+        tot_all_ans = int((df_t3["result_code"] == "ANSWERED").sum()) if not df_t3.empty else 0
+        all_asr_pct = (tot_all_ans / tot_all_calls * 100) if tot_all_calls > 0 else 0.0
+        all_err_pct = (tot_all_503 / tot_all_calls * 100) if tot_all_calls > 0 else 0.0
+        all_acd_sec = float(df_t3[df_t3["result_code"] == "ANSWERED"]["duration"].mean()) if tot_all_ans > 0 else 0.0
 
-            day_matrix_rows = []
-            for d in filtered_dates:
-                sub = full_df[full_df["date"] == d]
-                tot = len(sub)
-                ans = int((sub["result_code"] == "ANSWERED").sum())
-                unans = tot - ans
-                n_503 = int((sub["result_code"] == "503_CONGESTION").sum())
-                asr = round(ans / tot * 100, 1) if tot > 0 else 0.0
-                err = round(n_503 / tot * 100, 1) if tot > 0 else 0.0
-                diff_gap = round(asr - err, 1)
-                ratio_val = round(ans / max(1, n_503), 1)
-                acd = round(float(sub[sub["result_code"] == "ANSWERED"]["duration"].mean()), 1) if ans > 0 else 0.0
+        tot_all_p1 = sum(int(past_days_ts[d]["is_p1_red"].sum()) for d in filtered_dates if d in past_days_ts)
+        tot_all_p2 = sum(int(past_days_ts[d]["is_p2_yellow"].sum()) for d in filtered_dates if d in past_days_ts)
+        if is_realtime_mode and current_date in filtered_dates and not completed_buckets.empty:
+            tot_all_p1 += int(completed_buckets["is_p1_red"].sum())
+            tot_all_p2 += int(completed_buckets["is_p2_yellow"].sum())
 
-                ts_d = past_days_ts.get(d)
-                if ts_d is None and d == current_date:
-                    ts_d = completed_buckets
-                p1 = int(ts_d["is_p1_red"].sum()) if ts_d is not None and not ts_d.empty else 0
-                p2 = int(ts_d["is_p2_yellow"].sum()) if ts_d is not None and not ts_d.empty else 0
+        tot_completed_buckets_all = sum(len(past_days_ts[d]) for d in filtered_dates if d in past_days_ts) + ((len(completed_buckets) if is_realtime_mode else 0) if current_date in filtered_dates else 0)
+        sla_compliance_pct = ((tot_completed_buckets_all - tot_all_p1) / tot_completed_buckets_all * 100) if tot_completed_buckets_all > 0 else 100.0
 
-                if p1 > 0 or err >= 10.0:
-                    sla = "🔴 Vi phạm SLA"
-                elif p2 > 0 or err >= 5.0:
-                    sla = "🟡 Cảnh báo"
-                else:
-                    sla = "🟢 Đạt chuẩn SLA"
+        # Hàng 1: 3 Card chính
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Tổng Lưu Lượng Cuộc Gọi", f"{tot_all_calls:,} cuộc", f"{len(filtered_dates)} ngày vận hành")
+        c2.metric("Tỷ Lệ Bắt Máy Thành Công (ASR)", f"{all_asr_pct:.1f}%", f"{tot_all_ans:,} cuộc nghe máy (Mục tiêu >= 50%)", delta_color="normal" if all_asr_pct >= 50 else "inverse")
+        c3.metric("Thời Lượng Đàm Thoại TB (ACD)", f"{all_acd_sec:.0f} giây", "Trung bình cuộc gọi Answered", delta_color="off")
 
-                day_matrix_rows.append({
-                    "date_obj": d,
-                    "date_str": d.strftime("%Y-%m-%d (%a)"),
-                    "date_label": d.strftime("%a\n%d/%m"),
-                    "total_calls": tot,
-                    "calls_answered": ans,
-                    "calls_unanswered": unans,
-                    "asr_pct": asr,
-                    "calls_503": n_503,
-                    "error_rate_pct": err,
-                    "diff_gap_pct": diff_gap,
-                    "ratio_ans_err": ratio_val,
-                    "acd_sec": acd,
-                    "p1_alerts": p1,
-                    "p2_warnings": p2,
-                    "sla_status": sla
-                })
+        # Hàng 2: 3 Card chỉ số chất lượng & rủi ro
+        c4, c5, c6 = st.columns(3)
+        c4.metric("Tỷ Lệ Lỗi Viễn Thông 503", f"{all_err_pct:.2f}%", f"{tot_all_503} lỗi (Mục tiêu SLA <= 5.0%)", delta_color="inverse" if all_err_pct > 5 else "normal")
+        c5.metric("Độ Khả Dụng Vận Hành (SLA)", f"{sla_compliance_pct:.1f}%", "Tỷ lệ khung giờ không có sự cố P1", delta_color="normal" if sla_compliance_pct >= 95 else "inverse")
+        c6.metric("Tổng Số Sự Cố Ghi Nhận", f"{tot_all_p1} P1  |  {tot_all_p2} P2", "P1 Lỗi mạng / P2 Đột biến tải", delta_color="off")
 
-            df_matrix = pd.DataFrame(day_matrix_rows)
+        st.markdown("---")
 
-            if not df_matrix.empty:
-                col_chart_t3_1, col_chart_t3_2 = st.columns(2)
-                with col_chart_t3_1:
-                    st.markdown("#### 📈 Lưu Lượng Hoạt Động Theo Ngày")
-                    st.caption("So sánh cuộc gọi nghe máy thành công và cuộc gọi bị lỗi viễn thông 503 theo ngày (rê chuột để xem tương tác đa chỉ số).")
-                    fig_main = go.Figure()
-                    fig_main.add_trace(go.Bar(
-                        x=df_matrix["date_str"], y=df_matrix["calls_answered"],
-                        name="Kết nối thành công (Nghe máy)",
-                        marker_color="#38bdf8",
-                        hovertemplate="<b>Nghe máy:</b> %{y:,} cuộc<extra></extra>"
-                    ))
-                    fig_main.add_trace(go.Bar(
-                        x=df_matrix["date_str"], y=df_matrix["calls_503"],
-                        name="Cuộc gọi bị lỗi mạng (503)",
-                        marker_color="#f85149",
-                        text=[f"{int(v):,}" if v > 0 else "" for v in df_matrix["calls_503"]],
-                        textposition="outside",
-                        hovertemplate="<b>Lỗi mạng 503:</b> %{y:,} cuộc<extra></extra>"
-                    ))
-                    fig_main.update_layout(
-                        template=plotly_template,
-                        barmode="group",
-                        height=370,
-                        hovermode="x unified",
-                        paper_bgcolor=card_bg, plot_bgcolor=card_bg,
-                        margin=dict(l=30, r=20, t=50, b=30),
-                        yaxis=dict(title="Cuộc gọi / Ngày", gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
-                        xaxis=dict(gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
-                        legend=dict(orientation="h", y=1.18, x=0.5, xanchor="center", font=dict(color=text_main, size=11))
-                    )
-                    st.plotly_chart(fig_main, use_container_width=True)
+        # 2. BIỂU ĐỒ TRỰC QUAN ĐA NGÀY (CENTRAL ANALYTICS CHARTS)
 
-                with col_chart_t3_2:
-                    st.markdown("#### 🎯 Xu Hướng Chất Lượng & Tỷ Lệ Chênh Lệch (ASR vs Lỗi 503)")
-                    st.caption("Trực quan hóa tỷ lệ ASR, tỷ lệ lỗi 503, vùng chênh lệch an toàn (ASR - Lỗi) cùng các mốc SLA chuẩn.")
-                    fig_qual = go.Figure()
-                    # 1. Đường tỷ lệ bắt máy ASR
-                    fig_qual.add_trace(go.Scatter(
-                        x=df_matrix["date_str"], y=df_matrix["asr_pct"],
-                        mode="lines+markers",
-                        name="Tỷ lệ bắt máy ASR (%)",
-                        line=dict(color="#0284c7", width=2.5),
-                        marker=dict(size=7, color="#0369a1"),
-                        hovertemplate="<b>Tỷ lệ bắt máy ASR:</b> %{y:.1f}%<extra></extra>"
-                    ))
-                    # 2. Đường tỷ lệ lỗi viễn thông 503 kèm vùng phủ chênh lệch (ASR - Lỗi)
-                    fig_qual.add_trace(go.Scatter(
-                        x=df_matrix["date_str"], y=df_matrix["error_rate_pct"],
-                        mode="lines+markers",
-                        name="Tỷ lệ lỗi viễn thông 503 (%)",
-                        line=dict(color="#ef4444", width=2.5),
-                        marker=dict(size=7, color="#b91c1c"),
-                        fill="tonexty",
-                        fillcolor="rgba(2, 132, 199, 0.12)",
-                        hovertemplate="<b>Tỷ lệ lỗi 503:</b> %{y:.2f}%<extra></extra>"
-                    ))
-                    # 3. Đường chênh lệch an toàn ASR - Lỗi
-                    fig_qual.add_trace(go.Scatter(
-                        x=df_matrix["date_str"], y=df_matrix["diff_gap_pct"],
-                        mode="lines+markers",
-                        name="Chênh lệch (ASR - Lỗi)",
-                        line=dict(color="#a855f7", width=2, dash="dashdot"),
-                        marker=dict(size=6, symbol="diamond", color="#9333ea"),
-                        hovertemplate="<b>Chênh lệch (ASR - Lỗi):</b> +%{y:.1f}%<extra></extra>"
-                    ))
-                    # 4. Mục tiêu ASR chuẩn (>= 50%)
-                    fig_qual.add_trace(go.Scatter(
-                        x=df_matrix["date_str"],
-                        y=[50.0] * len(df_matrix),
-                        mode="lines",
-                        name="Mục tiêu ASR (≥ 50%)",
-                        line=dict(color="#10b981", width=1.5, dash="dot"),
-                        hoverinfo="skip"
-                    ))
-                    # 5. Ngưỡng an toàn lỗi viễn thông (<= 5%)
-                    fig_qual.add_trace(go.Scatter(
-                        x=df_matrix["date_str"],
-                        y=[5.0] * len(df_matrix),
-                        mode="lines",
-                        name="Ngưỡng an toàn lỗi (≤ 5%)",
-                        line=dict(color="#dc2626", width=1.5, dash="dash"),
-                        hoverinfo="skip"
-                    ))
-                    fig_qual.update_layout(
-                        template=plotly_template,
-                        height=370,
-                        hovermode="x unified",
-                        paper_bgcolor=card_bg, plot_bgcolor=card_bg,
-                        margin=dict(l=30, r=20, t=50, b=30),
-                        yaxis=dict(title="Tỷ lệ (%) / Chênh lệch (%)", range=[-2, max(65, float(df_matrix['asr_pct'].max()) + 10)], gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
-                        xaxis=dict(gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
-                        legend=dict(
-                            orientation="h",
-                            y=1.18,
-                            x=0.5,
-                            xanchor="center",
-                            font=dict(color=text_main, size=11)
-                        )
-                    )
-                    st.plotly_chart(fig_qual, use_container_width=True)
+        day_matrix_rows = []
+        for d in filtered_dates:
+            sub = full_df[full_df["date"] == d]
+            tot = len(sub)
+            ans = int((sub["result_code"] == "ANSWERED").sum())
+            unans = tot - ans
+            n_503 = int((sub["result_code"] == "503_CONGESTION").sum())
+            asr = round(ans / tot * 100, 1) if tot > 0 else 0.0
+            err = round(n_503 / tot * 100, 1) if tot > 0 else 0.0
+            diff_gap = round(asr - err, 1)
+            ratio_val = round(ans / max(1, n_503), 1)
+            acd = round(float(sub[sub["result_code"] == "ANSWERED"]["duration"].mean()), 1) if ans > 0 else 0.0
 
-            st.markdown("---")
+            ts_d = past_days_ts.get(d)
+            if ts_d is None and d == current_date:
+                ts_d = completed_buckets
+            p1 = int(ts_d["is_p1_red"].sum()) if ts_d is not None and not ts_d.empty else 0
+            p2 = int(ts_d["is_p2_yellow"].sum()) if ts_d is not None and not ts_d.empty else 0
 
-            # 2. PHÂN TÍCH CHUYÊN SÂU: PHỄU VẬN HÀNH & PHÂN BỔ THỜI LƯỢNG ĐÀM THOẠI
-            col_chart_t3_3, col_chart_t3_4 = st.columns(2)
-            with col_chart_t3_3:
-                st.markdown("#### 🔻 Phễu Chuyển Đổi Vận Hành Viễn Thông")
-                st.caption("Tỷ lệ chuyển đổi qua từng mắt xích vận hành.")
+            if p1 > 0 or err >= 10.0:
+                sla = "🔴 Vi phạm SLA"
+            elif p2 > 0 or err >= 5.0:
+                sla = "🟡 Cảnh báo"
+            else:
+                sla = "🟢 Đạt chuẩn SLA"
 
-                n_connected = tot_all_calls - tot_all_503
-                df_ans = df_t3[df_t3["result_code"] == "ANSWERED"] if not df_t3.empty else pd.DataFrame()
-                n_eff_30 = int((df_ans["duration"] >= 30).sum()) if not df_ans.empty else 0
-                n_deep_60 = int((df_ans["duration"] >= 60).sum()) if not df_ans.empty else 0
+            day_matrix_rows.append({
+                "date_obj": d,
+                "date_str": d.strftime("%Y-%m-%d (%a)"),
+                "date_label": d.strftime("%a\n%d/%m"),
+                "total_calls": tot,
+                "calls_answered": ans,
+                "calls_unanswered": unans,
+                "asr_pct": asr,
+                "calls_503": n_503,
+                "error_rate_pct": err,
+                "diff_gap_pct": diff_gap,
+                "ratio_ans_err": ratio_val,
+                "acd_sec": acd,
+                "p1_alerts": p1,
+                "p2_warnings": p2,
+                "sla_status": sla
+            })
 
-                fig_funnel = go.Figure(go.Funnel(
-                    y=[
-                        "1. Tổng cuộc gọi phát ra",
-                        "2. Kết nối mạng thành công",
-                        "3. Khách hàng bắt máy (ASR)",
-                        "4. Đàm thoại hiệu quả (≥30s)",
-                        "5. Tư vấn chuyên sâu (≥60s)"
-                    ],
-                    x=[tot_all_calls, n_connected, tot_all_ans, n_eff_30, n_deep_60],
-                    textposition="inside",
-                    textinfo="value+percent initial",
-                    opacity=0.9,
-                    marker=dict(
-                        color=["#3b82f6", "#06b6d4", "#10b981", "#8b5cf6", "#f59e0b"],
-                        line=dict(color=card_bg, width=2)
-                    ),
-                    connector={"line": {"color": border_col, "dash": "dot", "width": 1.5}},
-                    hovertemplate="<b>%{y}</b><br>• Số lượng: <b>%{x:,} cuộc</b><br>• Tỷ trọng so với tổng phát ra: <b>%{percentInitial:.1f}%</b><br>• Chuyển đổi từ tầng trước: <b>%{percentPrevious:.1f}%</b><extra></extra>"
+        df_matrix = pd.DataFrame(day_matrix_rows)
+
+        if not df_matrix.empty:
+            col_chart_t3_1, col_chart_t3_2 = st.columns(2)
+            with col_chart_t3_1:
+                st.markdown("#### 📈 Lưu Lượng Hoạt Động Theo Ngày")
+                st.caption("So sánh cuộc gọi nghe máy thành công và cuộc gọi bị lỗi viễn thông 503 theo ngày (rê chuột để xem tương tác đa chỉ số).")
+                fig_main = go.Figure()
+                fig_main.add_trace(go.Bar(
+                    x=df_matrix["date_str"], y=df_matrix["calls_answered"],
+                    name="Kết nối thành công (Nghe máy)",
+                    marker_color="#38bdf8",
+                    hovertemplate="<b>Nghe máy:</b> %{y:,} cuộc<extra></extra>"
                 ))
-                fig_funnel.update_layout(
-                    template=plotly_template,
-                    height=360,
-                    paper_bgcolor=card_bg, plot_bgcolor=card_bg,
-                    margin=dict(l=20, r=20, t=30, b=25),
-                    showlegend=False
-                )
-                st.plotly_chart(fig_funnel, use_container_width=True)
-
-            with col_chart_t3_4:
-                st.markdown("#### ⏱️ Phân Phối Thời Lượng Cuộc Gọi (ACD Breakdown)")
-                ans_cnt = len(df_ans)
-                st.caption("Đo lường mức độ tương tác và chiều sâu đàm thoại của các cuộc gọi bắt máy.")
-
-                if not df_ans.empty:
-                    dur_15 = int((df_ans["duration"] < 15).sum())
-                    dur_30 = int(((df_ans["duration"] >= 15) & (df_ans["duration"] <= 30)).sum())
-                    dur_60 = int(((df_ans["duration"] > 30) & (df_ans["duration"] <= 60)).sum())
-                    dur_120 = int(((df_ans["duration"] > 60) & (df_ans["duration"] <= 120)).sum())
-                    dur_plus = int((df_ans["duration"] > 120).sum())
-                else:
-                    dur_15 = dur_30 = dur_60 = dur_120 = dur_plus = 0
-
-                dur_labels = ["< 15s (Dập máy)", "15s - 30s (Chào hỏi)", "31s - 60s (Trao đổi)", "61s - 120s (Tiềm năng)", "> 120s (Chuyên sâu)"]
-                dur_vals = [dur_15, dur_30, dur_60, dur_120, dur_plus]
-                dur_colors = ["#f43f5e", "#f59e0b", "#3b82f6", "#8b5cf6", "#10b981"]
-                dur_texts = [f"{v:,} ({v/max(1, ans_cnt)*100:.1f}%)" if v > 0 else "0" for v in dur_vals]
-
-                fig_hist = go.Figure()
-                fig_hist.add_trace(go.Bar(
-                    x=dur_labels,
-                    y=dur_vals,
-                    text=dur_texts,
+                fig_main.add_trace(go.Bar(
+                    x=df_matrix["date_str"], y=df_matrix["calls_503"],
+                    name="Cuộc gọi bị lỗi mạng (503)",
+                    marker_color="#f85149",
+                    text=[f"{int(v):,}" if v > 0 else "" for v in df_matrix["calls_503"]],
                     textposition="outside",
-                    marker=dict(
-                        color=dur_colors,
-                        line=dict(color=card_bg, width=1.5)
-                    ),
-                    hovertemplate="<b>%{x}</b><br>• Số cuộc gọi: <b>%{y:,} cuộc</b><br>• Chiếm: <b>%{text} cuộc nghe máy</b><extra></extra>"
+                    hovertemplate="<b>Lỗi mạng 503:</b> %{y:,} cuộc<extra></extra>"
                 ))
-                fig_hist.update_layout(
+                fig_main.update_layout(
                     template=plotly_template,
-                    height=360,
+                    barmode="group",
+                    height=370,
+                    hovermode="x unified",
                     paper_bgcolor=card_bg, plot_bgcolor=card_bg,
-                    margin=dict(l=30, r=20, t=30, b=30),
-                    yaxis=dict(title="Số cuộc nghe máy", gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
+                    margin=dict(l=30, r=20, t=50, b=30),
+                    yaxis=dict(title="Cuộc gọi / Ngày", gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
                     xaxis=dict(gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
-                    showlegend=False
+                    legend=dict(orientation="h", y=1.18, x=0.5, xanchor="center", font=dict(color=text_main, size=11))
                 )
-                st.plotly_chart(fig_hist, use_container_width=True)
+                st.plotly_chart(fig_main, use_container_width=True)
 
-            st.markdown("---")
-
-            # 3. PHÂN VÙNG ĐÁY MASTER-DETAIL (60% BẢNG + 40% DONUT CHART & PHÂN BỔ)
-            col_bottom_table, col_bottom_donut = st.columns([1.6, 1.4])
-
-            with col_bottom_table:
-                st.markdown("#### 📋 Nhật Ký Đánh Giá Vận Hành Đa Ngày")
-                if not df_matrix.empty:
-                    display_matrix = pd.DataFrame()
-                    display_matrix["Ngày Vận Hành"] = df_matrix["date_str"]
-                    display_matrix["Tổng Cuộc"] = df_matrix["total_calls"].astype(int)
-                    display_matrix["Nghe Máy"] = df_matrix["calls_answered"].astype(int)
-                    display_matrix["Tỷ Lệ ASR"] = df_matrix["asr_pct"].astype(str) + "%"
-                    display_matrix["Lỗi 503"] = df_matrix["calls_503"].astype(int).astype(str) + " (" + df_matrix["error_rate_pct"].astype(str) + "%)"
-                    display_matrix["ACD"] = df_matrix["acd_sec"].astype(str) + "s"
-                    display_matrix["Trạng Thái SLA"] = df_matrix["sla_status"]
-
-                    st.dataframe(
-                        display_matrix.iloc[::-1],
-                        use_container_width=True,
-                        hide_index=True
-                    )
-
-            with col_bottom_donut:
-                st.markdown("#### 🎯 Cơ Cấu Kết Quả Cuộc Gọi")
-
-                outcome_meta = {
-                    "ANSWERED": {
-                        "badge": "🔵",
-                        "label": "Khách nghe máy",
-                        "group": "Thành công",
-                        "color": "#2563eb"
-                    },
-                    "NO_ANSWER": {
-                        "badge": "⚪",
-                        "label": "Không bắt máy",
-                        "group": "Khách hàng",
-                        "color": "#94a3b8"
-                    },
-                    "BUSY": {
-                        "badge": "🟡",
-                        "label": "Thuê bao bận",
-                        "group": "Khách hàng",
-                        "color": "#f59e0b"
-                    },
-                    "503_CONGESTION": {
-                        "badge": "🔴",
-                        "label": "Lỗi nghẽn mạng (SIP 503)",
-                        "group": "Lỗi hạ tầng",
-                        "color": "#ef4444"
-                    },
-                    "CALLBACK_REQUESTED": {
-                        "badge": "🟣",
-                        "label": "Hẹn gọi lại sau",
-                        "group": "Khách hàng",
-                        "color": "#8b5cf6"
-                    },
-                    "VOICEMAIL": {
-                        "badge": "🌐",
-                        "label": "Hộp thư thoại",
-                        "group": "Khách hàng",
-                        "color": "#06b6d4"
-                    }
-                }
-
-                res_counts = df_t3["result_code"].value_counts()
-                res_labels = res_counts.index.tolist()
-                res_vals = res_counts.values.tolist()
-
-                chart_labels = [outcome_meta.get(k, {}).get("label", k) for k in res_labels]
-                chart_colors = [outcome_meta.get(k, {}).get("color", "#cbd5e1") for k in res_labels]
-
-                # Biểu đồ Donut tương tác Plotly (rê chuột hiển thị số cuộc và tỷ trọng %)
-                fig_donut = go.Figure(data=[go.Pie(
-                    labels=chart_labels,
-                    values=res_vals,
-                    hole=0.62,
-                    sort=False,
-                    direction="clockwise",
-                    marker=dict(
-                        colors=chart_colors,
-                        line=dict(color=card_bg, width=2)
-                    ),
-                    textinfo="percent",
-                    textposition="inside",
-                    textfont=dict(size=11, color="#ffffff", family="sans-serif"),
-                    hovertemplate="<b>%{label}</b><br>• Số cuộc: <b>%{value:,} cuộc</b><br>• Tỷ trọng: <b>%{percent}</b><extra></extra>"
-                )])
-                fig_donut.update_layout(
+            with col_chart_t3_2:
+                st.markdown("#### 🎯 Xu Hướng Chất Lượng & Tỷ Lệ Chênh Lệch (ASR vs Lỗi 503)")
+                st.caption("Trực quan hóa tỷ lệ ASR, tỷ lệ lỗi 503, vùng chênh lệch an toàn (ASR - Lỗi) cùng các mốc SLA chuẩn.")
+                fig_qual = go.Figure()
+                # 1. Đường tỷ lệ bắt máy ASR
+                fig_qual.add_trace(go.Scatter(
+                    x=df_matrix["date_str"], y=df_matrix["asr_pct"],
+                    mode="lines+markers",
+                    name="Tỷ lệ bắt máy ASR (%)",
+                    line=dict(color="#0284c7", width=2.5),
+                    marker=dict(size=7, color="#0369a1"),
+                    hovertemplate="<b>Tỷ lệ bắt máy ASR:</b> %{y:.1f}%<extra></extra>"
+                ))
+                # 2. Đường tỷ lệ lỗi viễn thông 503 kèm vùng phủ chênh lệch (ASR - Lỗi)
+                fig_qual.add_trace(go.Scatter(
+                    x=df_matrix["date_str"], y=df_matrix["error_rate_pct"],
+                    mode="lines+markers",
+                    name="Tỷ lệ lỗi viễn thông 503 (%)",
+                    line=dict(color="#ef4444", width=2.5),
+                    marker=dict(size=7, color="#b91c1c"),
+                    fill="tonexty",
+                    fillcolor="rgba(2, 132, 199, 0.12)",
+                    hovertemplate="<b>Tỷ lệ lỗi 503:</b> %{y:.2f}%<extra></extra>"
+                ))
+                # 3. Đường chênh lệch an toàn ASR - Lỗi
+                fig_qual.add_trace(go.Scatter(
+                    x=df_matrix["date_str"], y=df_matrix["diff_gap_pct"],
+                    mode="lines+markers",
+                    name="Chênh lệch (ASR - Lỗi)",
+                    line=dict(color="#a855f7", width=2, dash="dashdot"),
+                    marker=dict(size=6, symbol="diamond", color="#9333ea"),
+                    hovertemplate="<b>Chênh lệch (ASR - Lỗi):</b> +%{y:.1f}%<extra></extra>"
+                ))
+                # 4. Mục tiêu ASR chuẩn (>= 50%)
+                fig_qual.add_trace(go.Scatter(
+                    x=df_matrix["date_str"],
+                    y=[50.0] * len(df_matrix),
+                    mode="lines",
+                    name="Mục tiêu ASR (≥ 50%)",
+                    line=dict(color="#10b981", width=1.5, dash="dot"),
+                    hoverinfo="skip"
+                ))
+                # 5. Ngưỡng an toàn lỗi viễn thông (<= 5%)
+                fig_qual.add_trace(go.Scatter(
+                    x=df_matrix["date_str"],
+                    y=[5.0] * len(df_matrix),
+                    mode="lines",
+                    name="Ngưỡng an toàn lỗi (≤ 5%)",
+                    line=dict(color="#dc2626", width=1.5, dash="dash"),
+                    hoverinfo="skip"
+                ))
+                fig_qual.update_layout(
                     template=plotly_template,
-                    height=330,
-                    margin=dict(l=15, r=15, t=15, b=15),
-                    paper_bgcolor=card_bg,
-                    plot_bgcolor=card_bg,
-                    showlegend=False,
-                    annotations=[
-                        dict(
-                            text=f"<b style='font-size:22px;color:{text_main};'>{tot_all_calls:,}</b><br><span style='font-size:11.5px;color:{text_muted};font-weight:500;'>Tổng cuộc gọi</span>",
-                            x=0.5, y=0.5,
-                            showarrow=False
-                        )
-                    ]
+                    height=370,
+                    hovermode="x unified",
+                    paper_bgcolor=card_bg, plot_bgcolor=card_bg,
+                    margin=dict(l=30, r=20, t=50, b=30),
+                    yaxis=dict(title="Tỷ lệ (%) / Chênh lệch (%)", range=[-2, max(65, float(df_matrix['asr_pct'].max()) + 10)], gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
+                    xaxis=dict(gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
+                    legend=dict(
+                        orientation="h",
+                        y=1.18,
+                        x=0.5,
+                        xanchor="center",
+                        font=dict(color=text_main, size=11)
+                    )
                 )
-                st.plotly_chart(fig_donut, use_container_width=True)
+                st.plotly_chart(fig_qual, use_container_width=True)
+
+        st.markdown("---")
+
+        # 2. PHÂN TÍCH CHUYÊN SÂU: PHỄU VẬN HÀNH & PHÂN BỔ THỜI LƯỢNG ĐÀM THOẠI
+        col_chart_t3_3, col_chart_t3_4 = st.columns(2)
+        with col_chart_t3_3:
+            st.markdown("#### 🔻 Phễu Chuyển Đổi Vận Hành Viễn Thông")
+            st.caption("Tỷ lệ chuyển đổi qua từng mắt xích vận hành.")
+
+            n_connected = tot_all_calls - tot_all_503
+            df_ans = df_t3[df_t3["result_code"] == "ANSWERED"] if not df_t3.empty else pd.DataFrame()
+            n_eff_30 = int((df_ans["duration"] >= 30).sum()) if not df_ans.empty else 0
+            n_deep_60 = int((df_ans["duration"] >= 60).sum()) if not df_ans.empty else 0
+
+            fig_funnel = go.Figure(go.Funnel(
+                y=[
+                    "1. Tổng cuộc gọi phát ra",
+                    "2. Kết nối mạng thành công",
+                    "3. Khách hàng bắt máy (ASR)",
+                    "4. Đàm thoại hiệu quả (≥30s)",
+                    "5. Tư vấn chuyên sâu (≥60s)"
+                ],
+                x=[tot_all_calls, n_connected, tot_all_ans, n_eff_30, n_deep_60],
+                textposition="inside",
+                textinfo="value+percent initial",
+                opacity=0.9,
+                marker=dict(
+                    color=["#3b82f6", "#06b6d4", "#10b981", "#8b5cf6", "#f59e0b"],
+                    line=dict(color=card_bg, width=2)
+                ),
+                connector={"line": {"color": border_col, "dash": "dot", "width": 1.5}},
+                hovertemplate="<b>%{y}</b><br>• Số lượng: <b>%{x:,} cuộc</b><br>• Tỷ trọng so với tổng phát ra: <b>%{percentInitial:.1f}%</b><br>• Chuyển đổi từ tầng trước: <b>%{percentPrevious:.1f}%</b><extra></extra>"
+            ))
+            fig_funnel.update_layout(
+                template=plotly_template,
+                height=360,
+                paper_bgcolor=card_bg, plot_bgcolor=card_bg,
+                margin=dict(l=20, r=20, t=30, b=25),
+                showlegend=False
+            )
+            st.plotly_chart(fig_funnel, use_container_width=True)
+
+        with col_chart_t3_4:
+            st.markdown("#### ⏱️ Phân Phối Thời Lượng Cuộc Gọi (ACD Breakdown)")
+            ans_cnt = len(df_ans)
+            st.caption("Đo lường mức độ tương tác và chiều sâu đàm thoại của các cuộc gọi bắt máy.")
+
+            if not df_ans.empty:
+                dur_15 = int((df_ans["duration"] < 15).sum())
+                dur_30 = int(((df_ans["duration"] >= 15) & (df_ans["duration"] <= 30)).sum())
+                dur_60 = int(((df_ans["duration"] > 30) & (df_ans["duration"] <= 60)).sum())
+                dur_120 = int(((df_ans["duration"] > 60) & (df_ans["duration"] <= 120)).sum())
+                dur_plus = int((df_ans["duration"] > 120).sum())
+            else:
+                dur_15 = dur_30 = dur_60 = dur_120 = dur_plus = 0
+
+            dur_labels = ["< 15s (Dập máy)", "15s - 30s (Chào hỏi)", "31s - 60s (Trao đổi)", "61s - 120s (Tiềm năng)", "> 120s (Chuyên sâu)"]
+            dur_vals = [dur_15, dur_30, dur_60, dur_120, dur_plus]
+            dur_colors = ["#f43f5e", "#f59e0b", "#3b82f6", "#8b5cf6", "#10b981"]
+            dur_texts = [f"{v:,} ({v/max(1, ans_cnt)*100:.1f}%)" if v > 0 else "0" for v in dur_vals]
+
+            fig_hist = go.Figure()
+            fig_hist.add_trace(go.Bar(
+                x=dur_labels,
+                y=dur_vals,
+                text=dur_texts,
+                textposition="outside",
+                marker=dict(
+                    color=dur_colors,
+                    line=dict(color=card_bg, width=1.5)
+                ),
+                hovertemplate="<b>%{x}</b><br>• Số cuộc gọi: <b>%{y:,} cuộc</b><br>• Chiếm: <b>%{text} cuộc nghe máy</b><extra></extra>"
+            ))
+            fig_hist.update_layout(
+                template=plotly_template,
+                height=360,
+                paper_bgcolor=card_bg, plot_bgcolor=card_bg,
+                margin=dict(l=30, r=20, t=30, b=30),
+                yaxis=dict(title="Số cuộc nghe máy", gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
+                xaxis=dict(gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
+                showlegend=False
+            )
+            st.plotly_chart(fig_hist, use_container_width=True)
+
+        st.markdown("---")
+
+        # 3. PHÂN VÙNG ĐÁY MASTER-DETAIL (60% BẢNG + 40% DONUT CHART & PHÂN BỔ)
+        col_bottom_table, col_bottom_donut = st.columns([1.6, 1.4])
+
+        with col_bottom_table:
+            st.markdown("#### 📋 Nhật Ký Đánh Giá Vận Hành Đa Ngày")
+            if not df_matrix.empty:
+                display_matrix = pd.DataFrame()
+                display_matrix["Ngày Vận Hành"] = df_matrix["date_str"]
+                display_matrix["Tổng Cuộc"] = df_matrix["total_calls"].astype(int)
+                display_matrix["Nghe Máy"] = df_matrix["calls_answered"].astype(int)
+                display_matrix["Tỷ Lệ ASR"] = df_matrix["asr_pct"].astype(str) + "%"
+                display_matrix["Lỗi 503"] = df_matrix["calls_503"].astype(int).astype(str) + " (" + df_matrix["error_rate_pct"].astype(str) + "%)"
+                display_matrix["ACD"] = df_matrix["acd_sec"].astype(str) + "s"
+                display_matrix["Trạng Thái SLA"] = df_matrix["sla_status"]
+
+                st.dataframe(
+                    display_matrix.iloc[::-1],
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+        with col_bottom_donut:
+            st.markdown("#### 🎯 Cơ Cấu Kết Quả Cuộc Gọi")
+
+            outcome_meta = {
+                "ANSWERED": {
+                    "badge": "🔵",
+                    "label": "Khách nghe máy",
+                    "group": "Thành công",
+                    "color": "#2563eb"
+                },
+                "NO_ANSWER": {
+                    "badge": "⚪",
+                    "label": "Không bắt máy",
+                    "group": "Khách hàng",
+                    "color": "#94a3b8"
+                },
+                "BUSY": {
+                    "badge": "🟡",
+                    "label": "Thuê bao bận",
+                    "group": "Khách hàng",
+                    "color": "#f59e0b"
+                },
+                "503_CONGESTION": {
+                    "badge": "🔴",
+                    "label": "Lỗi nghẽn mạng (SIP 503)",
+                    "group": "Lỗi hạ tầng",
+                    "color": "#ef4444"
+                },
+                "CALLBACK_REQUESTED": {
+                    "badge": "🟣",
+                    "label": "Hẹn gọi lại sau",
+                    "group": "Khách hàng",
+                    "color": "#8b5cf6"
+                },
+                "VOICEMAIL": {
+                    "badge": "🌐",
+                    "label": "Hộp thư thoại",
+                    "group": "Khách hàng",
+                    "color": "#06b6d4"
+                }
+            }
+
+            res_counts = df_t3["result_code"].value_counts()
+            res_labels = res_counts.index.tolist()
+            res_vals = res_counts.values.tolist()
+
+            chart_labels = [outcome_meta.get(k, {}).get("label", k) for k in res_labels]
+            chart_colors = [outcome_meta.get(k, {}).get("color", "#cbd5e1") for k in res_labels]
+
+            # Biểu đồ Donut tương tác Plotly (rê chuột hiển thị số cuộc và tỷ trọng %)
+            fig_donut = go.Figure(data=[go.Pie(
+                labels=chart_labels,
+                values=res_vals,
+                hole=0.62,
+                sort=False,
+                direction="clockwise",
+                marker=dict(
+                    colors=chart_colors,
+                    line=dict(color=card_bg, width=2)
+                ),
+                textinfo="percent",
+                textposition="inside",
+                textfont=dict(size=11, color="#ffffff", family="sans-serif"),
+                hovertemplate="<b>%{label}</b><br>• Số cuộc: <b>%{value:,} cuộc</b><br>• Tỷ trọng: <b>%{percent}</b><extra></extra>"
+            )])
+            fig_donut.update_layout(
+                template=plotly_template,
+                height=330,
+                margin=dict(l=15, r=15, t=15, b=15),
+                paper_bgcolor=card_bg,
+                plot_bgcolor=card_bg,
+                showlegend=False,
+                annotations=[
+                    dict(
+                        text=f"<b style='font-size:22px;color:{text_main};'>{tot_all_calls:,}</b><br><span style='font-size:11.5px;color:{text_muted};font-weight:500;'>Tổng cuộc gọi</span>",
+                        x=0.5, y=0.5,
+                        showarrow=False
+                    )
+                ]
+            )
+            st.plotly_chart(fig_donut, use_container_width=True)
 
         return is_today_finished
 
 # KÍCH HOẠT HIỂN THỊ
 is_day_done = render_live_monitoring_fragment()
 
-# Tự động làm mới liên tục khi ở chế độ Thời Gian Thực (để tự động đón nhận ngày mới khi chuyển ngày)
-if is_realtime_mode:
-    time.sleep(3.5)
-    st.rerun()

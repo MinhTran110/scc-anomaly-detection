@@ -1,0 +1,84 @@
+================================================================================
+                    SƠ ĐỒ TUẦN TỰ ĐƠN GIẢN (SEQUENCE DIAGRAMS)
+               HỆ THỐNG GIÁM SÁT & PHÁT HIỆN BẤT THƯỜNG CUỘC GỌI
+================================================================================
+
+MỤC TIÊU:
+- Luồng giao tiếp rõ ràng, trực quan, không dùng thuật ngữ kỹ thuật phức tạp.
+- Dễ dàng đưa vào báo cáo, thuyết trình hoặc dán vào Draw.io / Mermaid.
+
+================================================================================
+1. TÍNH NĂNG 1: THU THẬP VÀ LƯU TRỮ CUỘC GỌI (INGESTION)
+================================================================================
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor PBX as 📞 Tổng Đài (PBX)
+    participant Queue as ⚡ Hàng Đợi Tạm (Redis)
+    participant Worker as ⚙️ Bộ Xử Lý Dữ Liệu
+    participant DB as 🗄️ Cơ Sở Dữ Liệu
+
+    PBX->>PBX: Cuộc gọi kết thúc
+    PBX->>+Queue: Gửi thông tin cuộc gọi (thời lượng, trạng thái)
+    Queue-->>-PBX: Xác nhận đã nhận (Tổng đài tiếp tục gọi tiếp)
+
+    Worker->>+Queue: Lấy danh sách các cuộc gọi mới
+    Queue-->>-Worker: Trả về danh sách cuộc gọi
+    Worker->>+DB: Lưu danh sách cuộc gọi vào hệ thống
+    DB-->>-Worker: Xác nhận lưu thành công
+
+    DB->>DB: Tự động gom nhóm số liệu theo từng khung 15 phút
+```
+
+================================================================================
+2. TÍNH NĂNG 2: PHÁT HIỆN BẤT THƯỜNG VÀ CẢNH BÁO (DETECTION & ALERT)
+================================================================================
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Timer as ⏰ Bộ Đếm Thời Gian
+    participant Engine as 🧠 Bộ Phân Tích
+    participant DB as 🗄️ Cơ Sở Dữ Liệu
+    participant Bot as 🤖 Telegram Bot
+    actor NOC as 👷 Kỹ Sư Trực Ban
+
+    Timer->>+Engine: Kích hoạt kiểm tra (định kỳ mỗi 15 phút)
+    Engine->>+DB: Lấy số lượng cuộc gọi và số cuộc lỗi trong khung giờ
+    DB-->>-Engine: Trả về số liệu cuộc gọi
+    Engine->>Engine: So sánh số liệu thực tế với ngưỡng an toàn
+
+    alt Phát hiện sự cố (Sập tổng đài / Nghẽn mạng / Quá tải)
+        Engine->>+Bot: Gửi thông tin sự cố và hướng dẫn xử lý
+        Bot-->>-Engine: Đã gửi tin nhắn
+        Bot->>NOC: Bắn chuông báo động tới điện thoại trực ban
+        NOC->>NOC: Kỹ sư xử lý sự cố (khởi động lại máy chủ hoặc đổi đường truyền)
+    end
+```
+
+================================================================================
+3. TÍNH NĂNG 3: THEO DÕI VẬN HÀNH TRÊN DASHBOARD (MONITORING)
+================================================================================
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor NOC as 👤 Kỹ Sư Trực Ban
+    participant UI as 💻 Màn Hình Dashboard
+    participant DB as 🗄️ Cơ Sở Dữ Liệu
+
+    NOC->>+UI: Mở giao diện Dashboard trên trình duyệt
+    NOC->>UI: Chọn ngày cần theo dõi
+    UI->>+DB: Yêu cầu lấy toàn bộ dữ liệu trong ngày
+    DB-->>-UI: Trả về dữ liệu các khung giờ
+    
+    UI->>UI: Vẽ biểu đồ và tô màu khung giờ cảnh báo (Đỏ / Vàng)
+    UI-->>-NOC: Hiển thị các thẻ chỉ số và biểu đồ trực quan
+
+    loop Tự động cập nhật
+        UI->>+DB: Tự động lấy số liệu mới nhất sau mỗi 30 giây
+        DB-->>-UI: Trả về số liệu mới
+        UI-->>NOC: Làm mới biểu đồ trên màn hình
+    end
+```

@@ -1,0 +1,62 @@
+{
+  "Statistical Rule Engine": {
+    "auc_roc": 0.9973,
+    "pr_auc": 0.9625,
+    "precision": 0.925,
+    "recall": 1.0,
+    "f1_score": 0.961,
+    "fpr": 0.0044,
+    "confusion_matrix": {
+      "TN": 678,
+      "FP": 3,
+      "FN": 0,
+      "TP": 37
+    },
+    "latency_ms": 0.05
+  },
+  "Isolation Forest": {
+    "auc_roc": 0.9116,
+    "pr_auc": 0.5555,
+    "precision": 0.7059,
+    "recall": 0.3243,
+    "f1_score": 0.4444,
+    "fpr": 0.0073,
+    "confusion_matrix": {
+      "TN": 676,
+      "FP": 5,
+      "FN": 25,
+      "TP": 12
+    },
+    "latency_ms": 0.02
+  },
+  "One-Class SVM": {
+    "auc_roc": 0.8201,
+    "pr_auc": 0.3014,
+    "precision": 0.3929,
+    "recall": 0.2973,
+    "f1_score": 0.3385,
+    "fpr": 0.025,
+    "confusion_matrix": {
+      "TN": 664,
+      "FP": 17,
+      "FN": 26,
+      "TP": 11
+    },
+    "latency_ms": 0.01
+  },
+  "Local Outlier Factor": {
+    "auc_roc": 0.6723,
+    "pr_auc": 0.1841,
+    "precision": 0.3846,
+    "recall": 0.1351,
+    "f1_score": 0.2,
+    "fpr": 0.0117,
+    "confusion_matrix": {
+      "TN": 673,
+      "FP": 8,
+      "FN": 32,
+      "TP": 5
+    },
+    "latency_ms": 0.04
+  }
+}

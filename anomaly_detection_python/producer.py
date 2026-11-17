@@ -45,6 +45,7 @@ SIGNAL_FILE = DATA_DIR / "reset_signal.flag"
 stream_engine = StreamEngine()
 db_writer = DBWriter()
 RESULT_TYPES = ["ANSWERED", "NO_ANSWER", "BUSY", "CALLBACK_REQUESTED", "VOICEMAIL"]
+CARRIERS = ["VIETTEL", "VNPT", "MOBIFONE"]
 
 def get_next_business_day(cur_date):
     """Tính ngày làm việc tiếp theo (Bỏ qua Thứ Bảy và Chủ Nhật)."""
@@ -68,6 +69,8 @@ def generate_day_anomaly_plan(sim_date):
         "spike_volume": random.randint(10, 13),
         "outage_volume": random.randint(4, 6),
         "outage_err_rate": round(random.uniform(0.65, 0.85), 2),
+        "outage_carrier": random.choice(["VIETTEL", "VNPT", "MOBIFONE"]),
+        "outage_error": random.choice(["503_CONGESTION", "500_SERVER_ERROR", "504_GATEWAY_TIMEOUT", "429_TOO_MANY_REQUESTS"]),
     }
 
     # 1. P2 Traffic Spike: Xuất hiện trong các khung giờ cao điểm sáng hoặc chiều [9h, 10h, 14h, 15h]
@@ -248,19 +251,29 @@ def run_continuous_producer(bucket_delay_seconds: float = 3.5):
                 offsets = sorted([random.randint(5, 885) for _ in range(n_calls)])
                 for off in offsets:
                     c_start = b_start + timedelta(seconds=off)
-                    if random.random() < err_ratio:
-                        res = "503_CONGESTION"
+                    if is_outage and random.random() < err_ratio:
+                        c_carrier = anomaly_plan["outage_carrier"]
+                        res = anomaly_plan["outage_error"]
                         dur = random.randint(1, 3)
                     else:
-                        res = random.choices(RESULT_TYPES, weights=[0.55, 0.25, 0.10, 0.07, 0.03])[0]
-                        dur = random.randint(30, 210) if res == "ANSWERED" else random.randint(5, 20)
+                        c_carrier = random.choices(CARRIERS, weights=[0.55, 0.30, 0.15])[0]
+                        if random.random() < err_ratio:
+                            res = random.choice(["503_CONGESTION", "500_SERVER_ERROR", "504_GATEWAY_TIMEOUT", "429_TOO_MANY_REQUESTS"])
+                            dur = random.randint(1, 4)
+                        else:
+                            res = random.choices(RESULT_TYPES, weights=[0.55, 0.25, 0.10, 0.07, 0.03])[0]
+                            dur = random.randint(30, 210) if res == "ANSWERED" else random.randint(5, 20)
 
                     rec = {
                         "call_id": call_id,
+                        "campaign_id": 1,
+                        "customer_id": random.randint(1, 100),
+                        "employee_id": random.randint(2, 6),
                         "start_time": c_start.strftime("%Y-%m-%d %H:%M:%S"),
                         "end_time": (c_start + timedelta(seconds=dur)).strftime("%Y-%m-%d %H:%M:%S"),
                         "duration": dur,
-                        "result_code": res
+                        "result_code": res,
+                        "carrier": c_carrier
                     }
                     call_id += 1
                     bucket_calls.append(rec)
@@ -280,7 +293,7 @@ def run_continuous_producer(bucket_delay_seconds: float = 3.5):
                 for chunk in chunks:
                     for rec in chunk:
                         stream_engine.publish_call(rec)
-                    # Ghi nhận trực tiếp vào bảng calls_stream trong PostgreSQL
+                    # Ghi nhận trực tiếp vào bảng calls_stream và calls trong PostgreSQL
                     db_writer.save_calls_batch(chunk)
                     today_records.extend(chunk)
 
@@ -297,10 +310,14 @@ def run_continuous_producer(bucket_delay_seconds: float = 3.5):
             # Bản ghi lead tại b_end để Dashboard chốt khung 15 phút
             dummy_lead = {
                 "call_id": call_id,
+                "campaign_id": 1,
+                "customer_id": 1,
+                "employee_id": 2,
                 "start_time": b_end.strftime("%Y-%m-%d %H:%M:%S"),
                 "end_time": (b_end + timedelta(seconds=5)).strftime("%Y-%m-%d %H:%M:%S"),
                 "duration": 5,
-                "result_code": "ANSWERED"
+                "result_code": "ANSWERED",
+                "carrier": "VIETTEL"
             }
             all_records = past_records + today_records + [dummy_lead]
             tmp_file = DATA_DIR / "stream_buffer.tmp"
@@ -333,14 +350,18 @@ def run_continuous_producer(bucket_delay_seconds: float = 3.5):
                     )
                 elif is_outage:
                     day_notified.add(bucket_key)
-                    n_503 = sum(1 for c in bucket_calls if c["result_code"] == "503_CONGESTION")
-                    pct_503 = (n_503 / n_calls * 100) if n_calls > 0 else 0
+                    outage_carrier = anomaly_plan.get("outage_carrier", "VIETTEL")
+                    outage_err = anomaly_plan.get("outage_error", "503_CONGESTION")
+                    SYSTEM_ERRORS = {"503_CONGESTION", "500_SERVER_ERROR", "504_GATEWAY_TIMEOUT", "429_TOO_MANY_REQUESTS", "408_REQUEST_TIMEOUT"}
+                    n_err = sum(1 for c in bucket_calls if c["result_code"] in SYSTEM_ERRORS)
+                    pct_err = (n_err / n_calls * 100) if n_calls > 0 else 0
                     send_telegram_message(
-                        f"🚨🚨🚨 <b>[SCC OUTBOUND - P1 RED ALERT: NGHẼN MẠNG SIP TRUNK 503]</b> 🚨🚨🚨\n\n"
+                        f"🚨🚨🚨 <b>[SCC OUTBOUND - P1 RED ALERT: SỰ CỐ HẠ TẦNG {outage_carrier}]</b> 🚨🚨🚨\n\n"
                         f"⏰ <b>Khung phát hiện:</b> <code>{b_start.strftime('%H:%M')} ({sim_date.strftime('%d/%m/%Y')})</code>\n"
-                        f"❌ <b>Số cuộc lỗi 503:</b> <b>{n_503}/{n_calls} cuộc ({pct_503:.1f}%)</b>\n"
-                        f"⚠️ <b>YÊU CẦU:</b> Kiểm tra Gateway viễn thông và hạ tầng SIP Trunk ngay lập tức!\n"
-                        f"• Điều chuyển hướng sang trung kế dự phòng nếu cuộc gọi không thể thiết lập."
+                        f"📡 <b>Nhà mạng gặp sự cố:</b> <b>{outage_carrier}</b>\n"
+                        f"❌ <b>Mã lỗi viễn thông:</b> <code>{outage_err}</code>\n"
+                        f"📊 <b>Số cuộc lỗi:</b> <b>{n_err}/{n_calls} cuộc ({pct_err:.1f}%)</b>\n"
+                        f"⚠️ <b>YÊU CẦU:</b> Chuyển hướng sang SIP Trunk dự phòng khác | Báo kỹ thuật NOC {outage_carrier} ngay lập tức!"
                     )
 
             print(f"[{b_start.strftime('%H:%M')} -> {b_end.strftime('%H:%M')}] Chốt khung {idx+1:2d}/38: {n_calls:2d} cuộc (chia {len(chunks)} đợt 1-2 cuộc) | {tag}")

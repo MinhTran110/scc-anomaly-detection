@@ -21,8 +21,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 def _load_env_file():
     """Tự động tìm và đọc file .env nếu biến môi trường chưa được nạp."""
     candidates = [
-        Path(__file__).resolve().parent.parent / ".env",
         Path(__file__).resolve().parent / ".env",
+        Path(__file__).resolve().parent.parent / ".env",
         Path("/app/.env"),
         Path.cwd() / ".env"
     ]
@@ -38,7 +38,6 @@ def _load_env_file():
                             v = v.strip().strip("'\"")
                             if k not in os.environ or not os.environ[k]:
                                 os.environ[k] = v
-                break
             except Exception:
                 pass
 
@@ -95,13 +94,24 @@ class DBWriter:
         return self._get_target_connection(self.targets[0])
 
     def _get_target_connection(self, target: Dict[str, Any]) -> Optional[Any]:
-        """Khởi tạo hoặc tái sử dụng kết nối tới 1 mục tiêu cụ thể với cơ chế tự phục hồi."""
+        """Khởi tạo hoặc tái sử dụng kết nối tới 1 mục tiêu cụ thể với cơ chế tự phục hồi và tự phát hiện Docker/Host."""
         conn = target.get("conn")
-        try:
-            if conn is None or conn.closed != 0:
+        if conn is not None and conn.closed == 0:
+            return conn
+
+        # Danh sách địa chỉ (host, port) thử kết nối (hỗ trợ cả chạy trong Docker lẫn chạy trực tiếp ngoài Host)
+        endpoints = [(target["host"], target["port"])]
+        if target["host"] == "db":
+            endpoints.extend([("172.18.0.2", 5432), ("127.0.0.1", 5433), ("localhost", 5433), ("127.0.0.1", 5432)])
+        elif target["host"] in ("host.docker.internal", "172.24.102.52", "172.18.0.1"):
+            endpoints.extend([("172.18.0.1", target["port"]), ("172.24.102.52", target["port"]), ("127.0.0.1", target["port"]), ("localhost", target["port"])])
+
+        last_err = None
+        for h, p in endpoints:
+            try:
                 conn = psycopg2.connect(
-                    host=target["host"],
-                    port=target["port"],
+                    host=h,
+                    port=p,
                     dbname=target["dbname"],
                     user=target["user"],
                     password=target["password"],
@@ -109,14 +119,18 @@ class DBWriter:
                 )
                 conn.autocommit = True
                 target["conn"] = conn
+                target["active_host"] = h
+                target["active_port"] = p
                 if not target.get("initialized"):
                     self._ensure_tables(target)
                     target["initialized"] = True
-            return conn
-        except Exception as e:
-            logging.warning(f"⚠️ [DBWriter] Chưa thể kết nối {target['id']} ({target['host']}:{target['port']}/{target['dbname']}): {e}")
-            target["conn"] = None
-            return None
+                return conn
+            except Exception as e:
+                last_err = e
+
+        logging.warning(f"⚠️ [DBWriter] Chưa thể kết nối {target['id']} ({target['host']}:{target['port']}/{target['dbname']}): {last_err}")
+        target["conn"] = None
+        return None
 
     def _ensure_tables(self, target: Dict[str, Any]):
         """Đảm bảo các bảng cần thiết tồn tại trong Database mục tiêu."""
@@ -131,18 +145,30 @@ class DBWriter:
                     start_time  timestamp without time zone,
                     end_time    timestamp without time zone,
                     duration    integer,
-                    result_code character varying(50)
+                    result_code character varying(50),
+                    carrier     character varying(50) DEFAULT 'VIETTEL'
                 );
+
+                -- Bổ sung cột carrier nếu bảng đã tồn tại từ trước
+                ALTER TABLE public.calls_stream ADD COLUMN IF NOT EXISTS carrier character varying(50) DEFAULT 'VIETTEL';
 
                 CREATE TABLE IF NOT EXISTS public.call_timeseries (
                     bucket_time     timestamp without time zone NOT NULL PRIMARY KEY,
                     calls_total     integer NOT NULL DEFAULT 0,
                     calls_connected integer NOT NULL DEFAULT 0,
+                    calls_failed    integer NOT NULL DEFAULT 0,
+                    failed_carrier  character varying(50),
+                    specific_error  character varying(50),
                     avg_duration    numeric,
                     n_employees     integer NOT NULL DEFAULT 0,
                     is_imputed      boolean NOT NULL DEFAULT false,
                     created_at      timestamp without time zone NOT NULL DEFAULT now()
                 );
+
+                -- Bổ sung các cột lỗi nếu bảng call_timeseries đã tồn tại
+                ALTER TABLE public.call_timeseries ADD COLUMN IF NOT EXISTS calls_failed integer NOT NULL DEFAULT 0;
+                ALTER TABLE public.call_timeseries ADD COLUMN IF NOT EXISTS failed_carrier character varying(50);
+                ALTER TABLE public.call_timeseries ADD COLUMN IF NOT EXISTS specific_error character varying(50);
                 """)
             logging.info(f"✅ [DBWriter] Đã đảm bảo schema bảng sẵn sàng trên {target['id']}.")
         except Exception as e:
@@ -153,18 +179,19 @@ class DBWriter:
         if not records:
             return 0
 
-        query = """
-        INSERT INTO public.calls_stream (call_id, start_time, end_time, duration, result_code)
+        query_stream = """
+        INSERT INTO public.calls_stream (call_id, start_time, end_time, duration, result_code, carrier)
         VALUES %s
         ON CONFLICT (call_id) DO NOTHING;
         """
-        data_tuples = [
+        data_tuples_stream = [
             (
                 int(r["call_id"]),
                 str(r["start_time"]),
                 str(r["end_time"]),
                 int(r.get("duration", 0)),
-                str(r.get("result_code", "UNKNOWN"))
+                str(r.get("result_code", "UNKNOWN")),
+                str(r.get("carrier", "VIETTEL"))
             )
             for r in records
         ]
@@ -176,8 +203,44 @@ class DBWriter:
                 continue
             try:
                 with conn.cursor() as cur:
-                    execute_values(cur, query, data_tuples)
-                success_count = len(data_tuples)
+                    # 1. Ghi vào calls_stream
+                    execute_values(cur, query_stream, data_tuples_stream)
+
+                    # 2. Nếu là DB có bảng public.calls (như trên MinhTQ70), đồng bộ thẳng vào bảng calls
+                    cur.execute("SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'calls';")
+                    has_calls_table = cur.fetchone() is not None
+                    if has_calls_table:
+                        # Lấy map result_code -> result_id
+                        cur.execute("SELECT result_code, result_id FROM public.call_results;")
+                        res_map = dict(cur.fetchall())
+
+                        # Đảm bảo cột carrier đã có trong calls
+                        cur.execute("ALTER TABLE public.calls ADD COLUMN IF NOT EXISTS carrier VARCHAR(50) DEFAULT 'VIETTEL';")
+
+                        calls_tuples = [
+                            (
+                                int(r["call_id"]),
+                                int(r.get("campaign_id", 1)),
+                                int(r.get("customer_id", 1)),
+                                int(r.get("employee_id", 2)),
+                                res_map.get(str(r.get("result_code")), 1),
+                                str(r["start_time"]),
+                                str(r["end_time"]),
+                                int(r.get("duration", 0)),
+                                str(r.get("carrier", "VIETTEL")),
+                                "Simulated Call Event"
+                            )
+                            for r in records
+                        ]
+                        query_calls = """
+                        INSERT INTO public.calls (call_id, campaign_id, customer_id, employee_id, result_id, start_time, end_time, duration, carrier, notes)
+                        OVERRIDING SYSTEM VALUE
+                        VALUES %s
+                        ON CONFLICT (call_id) DO NOTHING;
+                        """
+                        execute_values(cur, query_calls, calls_tuples)
+
+                success_count = len(data_tuples_stream)
             except Exception as e:
                 logging.error(f"❌ [DBWriter] Lỗi ghi batch cuộc gọi vào {target['id']}: {e}")
                 try:
@@ -195,6 +258,9 @@ class DBWriter:
             bucket_time,
             calls_total,
             calls_connected,
+            calls_failed,
+            failed_carrier,
+            specific_error,
             avg_duration,
             n_employees,
             is_imputed,
@@ -227,6 +293,13 @@ class DBWriter:
                 COUNT(call_id) FILTER (
                     WHERE result_code IN ('ANSWERED', 'CALLBACK_REQUESTED', 'NOT_INTERESTED')
                 ) AS calls_connected,
+                COUNT(call_id) FILTER (
+                    WHERE result_code IN ('503_CONGESTION', '500_SERVER_ERROR', '504_GATEWAY_TIMEOUT', '429_TOO_MANY_REQUESTS', '408_REQUEST_TIMEOUT')
+                ) AS calls_failed,
+                (ARRAY_AGG(carrier ORDER BY (result_code IN ('503_CONGESTION', '500_SERVER_ERROR', '504_GATEWAY_TIMEOUT', '429_TOO_MANY_REQUESTS', '408_REQUEST_TIMEOUT')) DESC) 
+                 FILTER (WHERE result_code IN ('503_CONGESTION', '500_SERVER_ERROR', '504_GATEWAY_TIMEOUT', '429_TOO_MANY_REQUESTS', '408_REQUEST_TIMEOUT')))[1] AS failed_carrier,
+                (ARRAY_AGG(result_code ORDER BY (result_code IN ('503_CONGESTION', '500_SERVER_ERROR', '504_GATEWAY_TIMEOUT', '429_TOO_MANY_REQUESTS', '408_REQUEST_TIMEOUT')) DESC) 
+                 FILTER (WHERE result_code IN ('503_CONGESTION', '500_SERVER_ERROR', '504_GATEWAY_TIMEOUT', '429_TOO_MANY_REQUESTS', '408_REQUEST_TIMEOUT')))[1] AS specific_error,
                 ROUND(AVG(duration), 2) AS avg_duration,
                 0 AS n_employees
             FROM public.calls_stream
@@ -235,17 +308,23 @@ class DBWriter:
         )
         SELECT
             b.bucket_time,
-            COALESCE(ca.calls_total, 0)     AS calls_total,
-            COALESCE(ca.calls_connected, 0) AS calls_connected,
-            ca.avg_duration                 AS avg_duration,
-            0                               AS n_employees,
-            (ca.calls_total IS NULL)        AS is_imputed,
-            now()                           AS created_at
+            COALESCE(ca.calls_total, 0)      AS calls_total,
+            COALESCE(ca.calls_connected, 0)  AS calls_connected,
+            COALESCE(ca.calls_failed, 0)     AS calls_failed,
+            COALESCE(ca.failed_carrier, '-') AS failed_carrier,
+            COALESCE(ca.specific_error, '-') AS specific_error,
+            COALESCE(ca.avg_duration, 0.0)   AS avg_duration,
+            0                                AS n_employees,
+            (ca.calls_total IS NULL)         AS is_imputed,
+            now()                            AS created_at
         FROM buckets b
         LEFT JOIN call_agg ca ON b.bucket_time = ca.bucket_time
         ON CONFLICT (bucket_time) DO UPDATE SET
             calls_total     = EXCLUDED.calls_total,
             calls_connected = EXCLUDED.calls_connected,
+            calls_failed    = EXCLUDED.calls_failed,
+            failed_carrier  = EXCLUDED.failed_carrier,
+            specific_error  = EXCLUDED.specific_error,
             avg_duration    = EXCLUDED.avg_duration,
             n_employees     = EXCLUDED.n_employees,
             is_imputed      = EXCLUDED.is_imputed;
