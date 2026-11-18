@@ -66,11 +66,11 @@ def generate_day_anomaly_plan(sim_date):
         "spike_buckets": set(),
         "collapse_buckets": set(),
         "outage_buckets": set(),
-        "spike_volume": random.randint(10, 13),
-        "outage_volume": random.randint(4, 6),
-        "outage_err_rate": round(random.uniform(0.65, 0.85), 2),
+        "spike_volume": random.randint(700, 1100),
+        "outage_volume": random.randint(250, 450),
+        "outage_err_rate": round(random.uniform(0.35, 0.75), 2),
         "outage_carrier": random.choice(["VIETTEL", "VNPT", "MOBIFONE"]),
-        "outage_error": random.choice(["503_CONGESTION", "500_SERVER_ERROR", "504_GATEWAY_TIMEOUT", "429_TOO_MANY_REQUESTS"]),
+        "outage_error": random.choice(["503_CONGESTION", "500_SERVER_ERROR", "504_GATEWAY_TIMEOUT", "429_TOO_MANY_REQUESTS", "408_REQUEST_TIMEOUT"]),
     }
 
     # 1. P2 Traffic Spike: Xuất hiện trong các khung giờ cao điểm sáng hoặc chiều [9h, 10h, 14h, 15h]
@@ -232,7 +232,7 @@ def run_continuous_producer(bucket_delay_seconds: float = 3.5):
                 err_ratio = 0.02
                 tag = "🟡 [ĐỘT BIẾN TẢI P2]"
             elif is_collapse:
-                n_calls = 0
+                n_calls = random.randint(0, 10)
                 err_ratio = 0.0
                 tag = "🔴 [SẬP LƯU LƯỢNG P1]"
             elif is_outage:
@@ -240,9 +240,10 @@ def run_continuous_producer(bucket_delay_seconds: float = 3.5):
                 err_ratio = anomaly_plan["outage_err_rate"]
                 tag = "🚨 [NGHẼN 503 P1]"
             else:
-                # Bình thường: dao động tự nhiên quanh mức kỳ vọng base_mu (3 - 6 cuộc trong giờ cao điểm)
-                n_calls = max(2, int(round(np.random.normal(base_mu, 1.0))))
-                err_ratio = float(np.clip(np.random.normal(0.02, 0.005), 0.0, 0.04))
+                # Bình thường: dao động tự nhiên quanh mức kỳ vọng base_mu (100 - 400 cuộc theo khung giờ)
+                base_sd = HOURLY_PROFILE.get(str(cur_h), {}).get("sd", 35.0)
+                n_calls = max(50, int(round(np.random.normal(base_mu, base_sd))))
+                err_ratio = float(np.clip(np.random.normal(0.02, 0.005), 0.01, 0.035))
                 tag = "🟢 [BÌNH THƯỜNG]"
 
             # Sinh các cuộc gọi thuộc khung 15 phút này (thời gian phân bố đều)
@@ -258,7 +259,7 @@ def run_continuous_producer(bucket_delay_seconds: float = 3.5):
                     else:
                         c_carrier = random.choices(CARRIERS, weights=[0.55, 0.30, 0.15])[0]
                         if random.random() < err_ratio:
-                            res = random.choice(["503_CONGESTION", "500_SERVER_ERROR", "504_GATEWAY_TIMEOUT", "429_TOO_MANY_REQUESTS"])
+                            res = random.choice(["503_CONGESTION", "500_SERVER_ERROR", "504_GATEWAY_TIMEOUT", "429_TOO_MANY_REQUESTS", "408_REQUEST_TIMEOUT"])
                             dur = random.randint(1, 4)
                         else:
                             res = random.choices(RESULT_TYPES, weights=[0.55, 0.25, 0.10, 0.07, 0.03])[0]
@@ -278,11 +279,11 @@ def run_continuous_producer(bucket_delay_seconds: float = 3.5):
                     call_id += 1
                     bucket_calls.append(rec)
 
-            # Chia nhỏ danh sách cuộc gọi thành các đợt ghi ĐỀU ĐẶN ĐÚNG 1 HOẶC 2 CUỘC GỌI
+            # Chia nhỏ danh sách cuộc gọi thành các đợt ghi (Batch 30 - 50 cuộc)
             chunks = []
             i = 0
             while i < len(bucket_calls):
-                chunk_sz = min(random.choice([4, 7]), len(bucket_calls) - i)
+                chunk_sz = min(50, len(bucket_calls) - i)
                 chunks.append(bucket_calls[i : i + chunk_sz])
                 i += chunk_sz
 
@@ -296,13 +297,6 @@ def run_continuous_producer(bucket_delay_seconds: float = 3.5):
                     # Ghi nhận trực tiếp vào bảng calls_stream và calls trong PostgreSQL
                     db_writer.save_calls_batch(chunk)
                     today_records.extend(chunk)
-
-                    # Ghi đều đặn 1 hoặc 2 cuộc gọi ra file buffer
-                    all_records = past_records + today_records
-                    tmp_file = DATA_DIR / "stream_buffer.tmp"
-                    pd.DataFrame(all_records).to_csv(tmp_file, index=False)
-                    tmp_file.replace(STREAM_FILE)
-
                     time.sleep(sub_delay)
             else:
                 time.sleep(bucket_delay_seconds)
@@ -330,23 +324,59 @@ def run_continuous_producer(bucket_delay_seconds: float = 3.5):
             # Gửi cảnh báo Telegram nếu có sự cố phát sinh
             bucket_key = b_start.strftime("%Y-%m-%d %H:%M")
             if send_telegram_message and bucket_key not in day_notified:
+                TELECOM_ERROR_METADATA = {
+                    "503_CONGESTION": {
+                        "title": "NGHẼN MẠCH SIP TRUNK (CONGESTION)",
+                        "desc": "Hạ tầng tổng đài / Trunk của nhà mạng bị quá tải kênh đàm thoại",
+                        "action": "Kích hoạt chuyển hướng SIP Route sang Trunk dự phòng | Hạ CPS auto-dialer"
+                    },
+                    "504_GATEWAY_TIMEOUT": {
+                        "title": "HẾT THỜI GIAN CHỜ GATEWAY (GATEWAY TIMEOUT)",
+                        "desc": "Gateway SBC quá 32s không nhận được bản tin SIP 180 Ringing/200 OK từ nhà mạng",
+                        "action": "Kiểm tra IP Gateway, ping latency đường truyền kết nối trung kế"
+                    },
+                    "500_SERVER_ERROR": {
+                        "title": "LỖI MÁY CHỦ NỘI BỘ NHÀ MẠNG (INTERNAL ERROR)",
+                        "desc": "Core Softswitch hoặc Server SIP của đối tác bị sập dịch vụ hoặc lỗi nội bộ",
+                        "action": "Ngắt tạm tuyến gọi qua Carrier này | Mở ticket khẩn cấp lên Hotline NOC đối tác"
+                    },
+                    "429_TOO_MANY_REQUESTS": {
+                        "title": "VƯỢT ĐỊNH MỨC GỌI CPS (RATE LIMIT EXCEEDED)",
+                        "desc": "Tần suất cuộc gọi đồng thời vượt quá hạn mức thuê bao / hợp đồng đã đăng ký",
+                        "action": "Giảm tốc độ phát cuộc gọi trên Auto-dialer xuống dưới ngưỡng CPS trần"
+                    },
+                    "408_REQUEST_TIMEOUT": {
+                        "title": "HẾT HẠN YÊU CẦU THIẾT LẬP (REQUEST TIMEOUT)",
+                        "desc": "Đầu cuối hoặc trạm thu phát sóng không phản hồi yêu cầu thiết lập cuộc gọi",
+                        "action": "Kiểm tra kết nối NAT/Firewall và chất lượng đường truyền vật lý"
+                    }
+                }
+
                 if is_spike:
                     day_notified.add(bucket_key)
                     send_telegram_message(
-                        f"🟡🟡🟡 <b>[SCC OUTBOUND - P2 WARNING: TRAFFIC SPIKE]</b> 🟡🟡🟡\n\n"
+                        f"🟡🟡🟡 <b>[SCC OUTBOUND - P2 WARNING: TĂNG TẢI ĐỘT BIẾN]</b> 🟡🟡🟡\n\n"
                         f"⏰ <b>Khung phát hiện:</b> <code>{b_start.strftime('%H:%M')} ({sim_date.strftime('%d/%m/%Y')})</code>\n"
-                        f"📈 <b>Lưu lượng tăng vọt:</b> <b>{n_calls} cuộc</b> (Kỳ vọng: {base_mu:.1f})\n"
-                        f"ℹ️ <b>ĐÁNH GIÁ:</b> Đột biến tải chiến dịch hoặc auto-dialer đẩy tốc độ gọi.\n"
-                        f"• Khuyến nghị đội NOC theo dõi dung lượng đồng thời để tránh nghẽn kênh."
+                        f"📈 <b>Lưu lượng tăng vọt:</b> <b>{n_calls} cuộc / 15 phút</b> (Kỳ vọng: {base_mu:.0f} cuộc)\n"
+                        f"❌ <b>Mã cảnh báo:</b> <code>TRAFFIC_SPIKE</code> (Đột biến tải chiến dịch gọi ra)\n"
+                        f"ℹ️ <b>Bản chất:</b> Chiến dịch Marketing hoặc Auto-dialer tăng tốc độ gọi vượt ngưỡng thông thường.\n\n"
+                        f"🛠 <b>HƯỚNG DẪN ĐIỀU PHỐI:</b>\n"
+                        f"• Kiểm tra số kênh đàm thoại đồng thời (concurrent channels) trên Gateway SBC.\n"
+                        f"• Điều phối thêm điện thoại viên trực ca tiếp nhận cuộc trả lời thành công.\n"
+                        f"• <i>Mở SCC Dashboard > Tab 1 để kiểm soát tải kênh.</i>"
                     )
                 elif is_collapse:
                     day_notified.add(bucket_key)
                     send_telegram_message(
-                        f"🔴🔴🔴 <b>[SCC OUTBOUND - P1 RED ALERT: SẬP LƯU LƯỢNG PBX]</b> 🔴🔴🔴\n\n"
+                        f"🔴🔴🔴 <b>[SCC OUTBOUND - P1 ALERT: SẬP LƯU LƯỢNG PBX]</b> 🔴🔴🔴\n\n"
                         f"⏰ <b>Khung phát hiện:</b> <code>{b_start.strftime('%H:%M')} ({sim_date.strftime('%d/%m/%Y')})</code>\n"
-                        f"📉 <b>Lưu lượng:</b> <b>0 cuộc</b> (Kỳ vọng: {base_mu:.1f})\n"
-                        f"⚠️ <b>CẢNH BÁO:</b> Tổng đài PBX mất tín hiệu hoặc đứt kết nối trung kế!\n"
-                        f"• Kích hoạt kiểm tra Gateway viễn thông và trung kế SCC Outbound ngay lập tức."
+                        f"🖥 <b>Hệ thống ảnh hưởng:</b> <b>Tổng đài Asterisk / FreePBX Outbound</b>\n"
+                        f"❌ <b>Mã sự cố:</b> <code>DROP_TRAFFIC</code> (0 cuộc gọi / 15 phút, kỳ vọng: {base_mu:.0f} cuộc)\n"
+                        f"📝 <b>Bản chất sự cố:</b> Mất kết nối trung kế vật lý hoặc dịch vụ phát cuộc gọi tự động bị crash.\n\n"
+                        f"🛠 <b>HƯỚNG DẪN XỬ LÝ KHẨN CẤP:</b>\n"
+                        f"• Kiểm tra dịch vụ tổng đài: <code>systemctl status asterisk</code>\n"
+                        f"• Rà soát log lỗi trung kế tại <code>/var/log/asterisk/full</code>\n"
+                        f"• <i>Mở SCC Dashboard > Tab 1 để theo dõi phục hồi lưu lượng.</i>"
                     )
                 elif is_outage:
                     day_notified.add(bucket_key)
@@ -355,13 +385,21 @@ def run_continuous_producer(bucket_delay_seconds: float = 3.5):
                     SYSTEM_ERRORS = {"503_CONGESTION", "500_SERVER_ERROR", "504_GATEWAY_TIMEOUT", "429_TOO_MANY_REQUESTS", "408_REQUEST_TIMEOUT"}
                     n_err = sum(1 for c in bucket_calls if c["result_code"] in SYSTEM_ERRORS)
                     pct_err = (n_err / n_calls * 100) if n_calls > 0 else 0
+                    err_info = TELECOM_ERROR_METADATA.get(outage_err, {
+                        "title": f"SỰ CỐ VIỄN THÔNG {outage_err}",
+                        "desc": "Gián đoạn dịch vụ thoại kết nối nhà mạng",
+                        "action": "Kiểm tra tuyến trung kế và liên hệ NOC nhà mạng"
+                    })
                     send_telegram_message(
-                        f"🚨🚨🚨 <b>[SCC OUTBOUND - P1 RED ALERT: SỰ CỐ HẠ TẦNG {outage_carrier}]</b> 🚨🚨🚨\n\n"
+                        f"🚨🚨🚨 <b>[SCC OUTBOUND - P1 ALERT: {err_info['title']}]</b> 🚨🚨🚨\n\n"
                         f"⏰ <b>Khung phát hiện:</b> <code>{b_start.strftime('%H:%M')} ({sim_date.strftime('%d/%m/%Y')})</code>\n"
-                        f"📡 <b>Nhà mạng gặp sự cố:</b> <b>{outage_carrier}</b>\n"
-                        f"❌ <b>Mã lỗi viễn thông:</b> <code>{outage_err}</code>\n"
-                        f"📊 <b>Số cuộc lỗi:</b> <b>{n_err}/{n_calls} cuộc ({pct_err:.1f}%)</b>\n"
-                        f"⚠️ <b>YÊU CẦU:</b> Chuyển hướng sang SIP Trunk dự phòng khác | Báo kỹ thuật NOC {outage_carrier} ngay lập tức!"
+                        f"📡 <b>Nhà mạng ảnh hưởng:</b> <b>{outage_carrier}</b>\n"
+                        f"❌ <b>Mã lỗi kỹ thuật:</b> <code>{outage_err}</code>\n"
+                        f"📝 <b>Bản chất sự cố:</b> {err_info['desc']}\n"
+                        f"📊 <b>Thống kê gián đoạn:</b> <b>{n_err}/{n_calls} cuộc lỗi ({pct_err:.1f}%)</b>\n\n"
+                        f"🛠 <b>HƯỚNG DẪN XỬ LÝ KHẨN CẤP:</b>\n"
+                        f"• {err_info['action']}\n"
+                        f"• <i>Mở SCC Dashboard > Tab 1 để tra cứu chi tiết từng mã cuộc gọi (call_id) lỗi.</i>"
                     )
 
             print(f"[{b_start.strftime('%H:%M')} -> {b_end.strftime('%H:%M')}] Chốt khung {idx+1:2d}/38: {n_calls:2d} cuộc (chia {len(chunks)} đợt 1-2 cuộc) | {tag}")

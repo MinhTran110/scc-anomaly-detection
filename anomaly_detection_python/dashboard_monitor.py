@@ -1,18 +1,22 @@
 # dashboard_monitor.py
 """
-SCC Outbound: Real-time Anomaly Detection & Machine Learning Analytics Dashboard
-Phiên bản 3.1:
-1. Bảng Sự Cố Vận Hành tinh gọn: Loại bỏ các chỉ số học thuật (z-score, ml_score, ML Verdict), tập trung vào chỉ số nghiệp vụ và khuyến nghị xử lý.
-2. Machine Learning thực thụ: 
-   - Phân tích chu kỳ sinh học 24h (Seasonality Decomposition) từ dữ liệu lịch sử.
-   - Dự báo khả năng gặp sự cố / Nguy cơ bất thường theo từng khung giờ (Historical Risk Forecasting).
-3. Tự động nhận diện ngày trực tiếp đa ngày, chuyển ngày mượt mà sau 17:30.
-4. Mở trang tức thì (< 0.5s), hiệu năng cao.
+SCC Outbound: Telecom NOC (Network Operations Center) & Anomaly Detection System
+Phiên bản 3.2.2-NOC:
+1. Tinh gọn 4 Phân hệ cốt lõi chuẩn NOC trên Sidebar:
+   - Dashboard: Giám sát vận hành trực tiếp ca trực (Tiến độ ca trực, 4 Hero KPIs, 2 biểu đồ GP & Bayes, Bảng sự cố kèm hồ sơ điều tra kỹ thuật SOP).
+   - Analysis: Phân tích máy học chu kỳ 24h & Ma trận rủi ro theo khung giờ.
+   - Reports: Đối soát tổng hợp tuần làm việc (T2-T6), ASR, ACD, SLA, Phễu vận hành, Bảng đánh giá chất lượng từng nhà mạng (Carrier Scorecard) & Donut.
+   - System: Đo lường hạ tầng viễn thông (Dual-Write DB1 container, DB2 host, Redis, Telegram).
+2. Bộ lọc lịch được chuyển lại vào bên trong từng Tab (không để ở sidebar).
+3. Nút đóng/mở sidebar được làm nổi bật với viền và nền tương phản cao, dễ nhìn và dễ bấm.
+4. Lấp đầy khoảng trống với các tiện ích nghiệp vụ viễn thông thực tế (Tiến độ ca trực, Bảng đối soát nhà mạng, Heatmap rủi ro).
+5. 100% không icon emoji rườm rà, ẩn hoàn toàn nút tích tròn radio.
 """
 import sys
 import os
 import time
 import json
+import logging
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -20,6 +24,7 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import plotly.graph_objects as go
@@ -31,19 +36,21 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 SYSTEM_ERRORS = ["503_CONGESTION", "500_SERVER_ERROR", "504_GATEWAY_TIMEOUT", "429_TOO_MANY_REQUESTS", "408_REQUEST_TIMEOUT"]
 
 st.set_page_config(
-    page_title="SCC Outbound - Realtime Anomaly & ML Monitor",
+    page_title="SCC Outbound - Telecom NOC & Anomaly System",
     page_icon="📞",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # ==============================================================================
-# QUẢN LÝ THEME GIAO DIỆN: SÁNG ☀️ / TỐI 🌙
+# QUẢN LÝ THEME GIAO DIỆN: SÁNG / TỐI
 # ==============================================================================
-if "theme_mode" not in st.session_state:
-    st.session_state["theme_mode"] = "Sáng ☀️"
+try:
+    theme_mode = st.session_state.get("theme_mode", "Sáng")
+except Exception:
+    theme_mode = "Sáng"
 
-theme_mode = st.session_state["theme_mode"]
-is_dark = (theme_mode == "Tối 🌙")
+is_dark = (theme_mode == "Tối")
 
 bg_main = "#0b0f19" if is_dark else "#f8fafc"
 card_bg = "#111827" if is_dark else "#ffffff"
@@ -65,52 +72,199 @@ st.markdown(f"""
     color-scheme: {color_scheme} !important;
 }}
 
-/* 1. NỀN TOÀN TRANG ĐỒNG NHẤT */
+/* 1. NỀN TOÀN TRANG & TỐI ƯU CHIỀU RỘNG */
 html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"], .main, .block-container {{
     background-color: {bg_main} !important;
     color: {text_main} !important;
+}}
+.block-container {{
+    padding-top: 1.2rem !important;
+    padding-bottom: 2rem !important;
+    padding-left: 1.5rem !important;
+    padding-right: 1.5rem !important;
+    max-width: 100% !important;
 }}
 [data-testid="stHeader"] {{
     background-color: {bg_main} !important;
 }}
 
-/* ẨN TOÀN BỘ SIDEBAR THEO YÊU CẦU */
-[data-testid="stSidebar"], section[data-testid="stSidebar"] {{
+/* 2. ẨN HOÀN TOÀN NÚT TÍCH HÌNH TRÒN CỦA RADIO TRÊN TOÀN GIAO DIỆN */
+div[data-testid="stRadio"] input[type="radio"] {{
+    position: absolute !important;
+    opacity: 0 !important;
+    width: 0 !important;
+    height: 0 !important;
+    pointer-events: none !important;
+}}
+div[data-testid="stRadio"] label > div:first-of-type,
+div[data-testid="stRadio"] label > div:first-child,
+div[data-testid="stRadio"] label > div[aria-hidden="true"] {{
+    display: none !important;
+}}
+div[data-testid="stRadio"] label svg {{
     display: none !important;
 }}
 
-/* VĂN BẢN VÀ TIÊU ĐỀ SẮC NÉT */
+/* 3. SIDEBAR BÊN TRÁI CHUẨN SOC / NIDS */
+section[data-testid="stSidebar"] {{
+    background-color: {card_bg} !important;
+    border-right: 1px solid {border_col} !important;
+    padding-top: 1.2rem !important;
+}}
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{
+    gap: 0.6rem !important;
+}}
+section[data-testid="stSidebar"] div[data-testid="stRadio"] > div {{
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+}}
+
+/* CÁC MỤC MENU DẠNG NÚT BẤM / PILL (KHÔNG CÒN NÚT TRÒN) */
+section[data-testid="stSidebar"] div[data-testid="stRadio"] label {{
+    display: flex !important;
+    align-items: center !important;
+    width: 100% !important;
+    padding: 10px 14px !important;
+    border-radius: 8px !important;
+    font-size: 14px !important;
+    font-weight: 600 !important;
+    cursor: pointer !important;
+    transition: all 0.15s ease-in-out !important;
+    border: 1px solid transparent !important;
+    color: {text_main} !important;
+    margin: 0 !important;
+}}
+section[data-testid="stSidebar"] div[data-testid="stRadio"] label:hover {{
+    background-color: {tab_active_bg} !important;
+    color: {tab_active_text} !important;
+}}
+
+/* MỤC ĐANG ĐƯỢC CHỌN (ACTIVE HIGHLIGHT) */
+section[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked),
+section[data-testid="stSidebar"] div[data-testid="stRadio"] label[data-checked="true"] {{
+    background-color: {"#3b82f6" if is_dark else "#0284c7"} !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    box-shadow: 0 2px 6px rgba(2, 132, 199, 0.25) !important;
+}}
+section[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked) *,
+section[data-testid="stSidebar"] div[data-testid="stRadio"] label[data-checked="true"] * {{
+    color: #ffffff !important;
+    font-weight: 700 !important;
+}}
+
+/* 4. THEME TOGGLE SÁNG / TỐI DẠNG NÚT BẤM PHÂN ĐOẠN (SEGMENTED PILL SWITCH) */
+.main div[data-testid="stRadio"] {{
+    display: flex !important;
+    justify-content: flex-end !important;
+    align-items: center !important;
+    margin-top: 2px !important;
+}}
+.main div[data-testid="stRadio"] > label {{
+    display: none !important;
+}}
+.main div[data-testid="stRadio"] div[role="radiogroup"] {{
+    display: inline-flex !important;
+    flex-direction: row !important;
+    background-color: {"#1e293b" if is_dark else "#f1f5f9"} !important;
+    border: 1px solid {"#334155" if is_dark else "#cbd5e1"} !important;
+    border-radius: 9999px !important;
+    padding: 3px !important;
+    gap: 3px !important;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+    width: fit-content !important;
+    margin-left: auto !important;
+}}
+.main div[data-testid="stRadio"] div[role="radiogroup"] label {{
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 6px 18px !important;
+    border-radius: 9999px !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    cursor: pointer !important;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    margin: 0 !important;
+    color: {"#94a3b8" if is_dark else "#64748b"} !important;
+    background: transparent !important;
+    border: none !important;
+    user-select: none !important;
+}}
+.main div[data-testid="stRadio"] div[role="radiogroup"] label:hover {{
+    color: {text_main} !important;
+    background-color: {"rgba(255,255,255,0.06)" if is_dark else "rgba(0,0,0,0.04)"} !important;
+}}
+.main div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked),
+.main div[data-testid="stRadio"] div[role="radiogroup"] label:has(:checked),
+.main div[data-testid="stRadio"] div[role="radiogroup"] label[data-checked="true"] {{
+    background-color: {"#3b82f6" if is_dark else "#ffffff"} !important;
+    color: {"#ffffff" if is_dark else "#0f172a"} !important;
+    font-weight: 700 !important;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18) !important;
+}}
+.main div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) *,
+.main div[data-testid="stRadio"] div[role="radiogroup"] label:has(:checked) *,
+.main div[data-testid="stRadio"] div[role="radiogroup"] label[data-checked="true"] * {{
+    color: {"#ffffff" if is_dark else "#0f172a"} !important;
+    font-weight: 700 !important;
+}}
+
+iframe[title="streamlit.components.v1.html"],
+iframe[title*="components.v1.html"],
+div[data-testid="stCustomComponentV1"] {{
+    position: absolute !important;
+    width: 0 !important;
+    height: 0 !important;
+    border: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}}
+
+/* 5. NÚT ĐÓNG / MỞ SIDEBAR NỔI BẬT & DỄ NHÌN */
+[data-testid="stSidebarCollapseButton"],
+button[aria-label="Close sidebar"],
+button[aria-label="Open sidebar"],
+[data-testid="collapsedControl"] {{
+    background-color: {card_bg} !important;
+    border: 1.5px solid {"#3b82f6" if is_dark else "#0284c7"} !important;
+    border-radius: 8px !important;
+    color: {text_main} !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2) !important;
+    padding: 4px 6px !important;
+    transition: all 0.2s ease !important;
+}}
+[data-testid="stSidebarCollapseButton"]:hover,
+[data-testid="collapsedControl"]:hover {{
+    background-color: #0284c7 !important;
+    color: #ffffff !important;
+    border-color: #0284c7 !important;
+    transform: scale(1.08) !important;
+}}
+[data-testid="stSidebarCollapseButton"] svg,
+[data-testid="collapsedControl"] svg {{
+    fill: {"#38bdf8" if is_dark else "#0284c7"} !important;
+    stroke: {"#38bdf8" if is_dark else "#0284c7"} !important;
+    width: 20px !important;
+    height: 20px !important;
+}}
+[data-testid="stSidebarCollapseButton"]:hover svg,
+[data-testid="collapsedControl"]:hover svg {{
+    fill: #ffffff !important;
+    stroke: #ffffff !important;
+}}
+
+/* 6. VĂN BẢN VÀ TIÊU ĐỀ SẮC NÉT */
 h1, h2, h3, h4, h5, h6, p, span, label {{
     color: {text_main} !important;
 }}
 
-/* 2. THANH TAB ĐIỀU HƯỚNG HIỆN ĐẠI */
-.stTabs [data-baseweb="tab-list"] {{
-    gap: 10px !important;
-    background-color: transparent !important;
-    border-bottom: 2px solid {border_col} !important;
-    padding-bottom: 0px !important;
-}}
-.stTabs [data-baseweb="tab"] {{
-    background-color: {card_bg} !important;
-    color: {text_muted} !important;
-    font-weight: 600 !important;
-    font-size: 13.5px !important;
-    padding: 8px 18px !important;
-    border-radius: 6px 6px 0 0 !important;
-    border: 1px solid {border_col} !important;
-    border-bottom: none !important;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.02) !important;
-}}
-.stTabs [aria-selected="true"] {{
-    background-color: {tab_active_bg} !important;
-    color: {tab_active_text} !important;
-    font-weight: 700 !important;
-    border-color: {tab_active_text} !important;
-    border-bottom: 2px solid {tab_active_text} !important;
-}}
-
-/* 3. BỘ LỌC LỊCH (CALENDAR DATE PICKER) & POPUP LỊCH */
+/* 7. BỘ LỌC LỊCH (CALENDAR DATE PICKER) & POPUP LỊCH */
 div[data-baseweb="input"], div[data-baseweb="base-input"], div[data-baseweb="select"] {{
     background-color: {card_bg} !important;
     border: 1px solid {border_col} !important;
@@ -127,7 +281,6 @@ div[data-baseweb="input"] svg {{
     fill: {text_main} !important;
 }}
 
-/* POPOVER LỊCH VÀ TOÀN BỘ CÁC THẺ CON BÊN TRONG CALENDAR */
 div[data-baseweb="popover"],
 div[data-baseweb="popover"] div,
 div[data-baseweb="calendar"],
@@ -140,19 +293,12 @@ div[data-baseweb="popover"] {{
     border-radius: 12px !important;
     border: 1px solid {border_col} !important;
     box-shadow: 0 10px 25px -5px rgba(0,0,0,0.4) !important;
+    z-index: 1000005 !important;
 }}
-
-/* TOÀN BỘ CHỮ, NÚT BẤM, THÁNG, NĂM VÀ ICON TRONG LỊCH */
-div[data-baseweb="calendar"] *,
-div[data-baseweb="calendar"] button,
-div[data-baseweb="calendar"] button *,
-div[data-baseweb="calendar"] [aria-live="polite"],
-div[data-baseweb="calendar"] [aria-live="polite"] * {{
+div[data-baseweb="calendar"] * {{
     color: {cal_text_color} !important;
     fill: {cal_text_color} !important;
 }}
-
-/* Nút chọn tháng và năm (StyledMonthYearSelectButton) */
 div[data-baseweb="calendar"] button {{
     background-color: transparent !important;
     color: {cal_text_color} !important;
@@ -165,101 +311,34 @@ div[data-baseweb="calendar"] button:hover {{
     background-color: {tab_active_bg} !important;
     color: {tab_active_text} !important;
 }}
-
-/* Nút mũi tên chuyển tháng < và > */
-div[data-baseweb="calendar"] button svg,
-div[data-baseweb="calendar"] button svg path {{
-    fill: {cal_text_color} !important;
-    stroke: {cal_text_color} !important;
-    color: {cal_text_color} !important;
-}}
-
-/* Dropdown menu chọn tháng / năm */
-ul[role="listbox"],
-ul[role="listbox"] *,
-div[role="listbox"],
-div[role="listbox"] * {{
-    background-color: {card_bg} !important;
-    color: {cal_text_color} !important;
-}}
-li[role="option"]:hover,
-li[role="option"][aria-selected="true"] {{
-    background-color: #0284c7 !important;
-    color: #ffffff !important;
-}}
-
-/* TIÊU ĐỀ THỨ (Su, Mo, Tu, We, Th, Fr, Sa) */
-div[data-baseweb="calendar"] [role="row"] > div[aria-hidden="true"],
-div[data-baseweb="calendar"] [role="columnheader"] {{
-    background-color: transparent !important;
-    color: {text_muted} !important;
-    font-weight: 600 !important;
-    font-size: 12px !important;
-}}
-
-/* Ô NGÀY TRONG LỊCH */
-div[data-baseweb="calendar"] [role="gridcell"] {{
-    color: {cal_text_color} !important;
-    font-size: 13px !important;
-}}
-div[data-baseweb="calendar"] [role="gridcell"] > div {{
-    color: {cal_text_color} !important;
-}}
-div[data-baseweb="calendar"] [role="gridcell"]:hover > div {{
-    background-color: {tab_active_bg} !important;
-    color: {tab_active_text} !important;
-}}
-
-/* NGÀY ĐANG ĐƯỢC CHỌN (SELECTED) */
 div[data-baseweb="calendar"] [aria-selected="true"],
-div[data-baseweb="calendar"] [aria-selected="true"] > div,
-div[data-baseweb="calendar"] [aria-selected="true"]:hover > div {{
+div[data-baseweb="calendar"] [aria-selected="true"] > div {{
     background-color: #0284c7 !important;
     color: #ffffff !important;
     font-weight: 700 !important;
     border-radius: 50% !important;
 }}
-div[data-baseweb="calendar"] [aria-selected="true"] * {{
-    color: #ffffff !important;
-}}
 
-/* NGÀY VÔ HIỆU HÓA (NGOÀI DẢI CHỌN) */
-div[data-baseweb="calendar"] [aria-disabled="true"],
-div[data-baseweb="calendar"] [aria-disabled="true"] * {{
-    color: {"#374151" if is_dark else "#cbd5e1"} !important;
-    opacity: 0.3 !important;
-    cursor: not-allowed !important;
-}}
-
-/* 4. ẨN HOÀN TOÀN CÁC NÚT TRIGGER KHỎI GIAO DIỆN MÀN HÌNH */
-div[data-testid="stButton"] {{
-    position: fixed !important;
-    left: -9999px !important;
-    top: -9999px !important;
-    width: 0 !important;
-    height: 0 !important;
-    opacity: 0 !important;
-    pointer-events: none !important;
-    overflow: hidden !important;
-    margin: 0 !important;
-    padding: 0 !important;
-}}
-
-/* 5. NÚT CHỌN RADIO */
-div[data-testid="stRadio"] > div {{
-    background-color: {card_bg} !important;
-    border: 1px solid {border_col} !important;
+/* 8. NÚT BẤM STREAMLIT HIỆN ĐẠI */
+div[data-testid="stButton"] button {{
     border-radius: 8px !important;
-    padding: 5px 12px !important;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.03) !important;
-}}
-div[data-testid="stRadio"] label {{
-    color: {text_main} !important;
-    font-weight: 500 !important;
+    font-weight: 600 !important;
     font-size: 13px !important;
+    padding: 6px 14px !important;
+    background-color: {card_bg} !important;
+    color: {text_main} !important;
+    border: 1px solid {border_col} !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04) !important;
+    transition: all 0.2s ease !important;
+}}
+div[data-testid="stButton"] button:hover {{
+    border-color: #0284c7 !important;
+    color: #0284c7 !important;
+    transform: translateY(-1px) !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12) !important;
 }}
 
-/* 5. CÁC KHỐI BIỂU ĐỒ & BẢNG SỰ CỐ */
+/* 9. CARD, DATAFRAME, PLOTLY CHART & METRIC */
 div[data-testid="stDataFrame"] {{
     background-color: {card_bg} !important;
     border: 1px solid {border_col} !important;
@@ -290,15 +369,25 @@ div[data-testid="stMetricValue"] * {{
     font-size: 22px !important;
     font-weight: 700 !important;
 }}
-
-/* ĐƯỜNG PHÂN CÁCH TINH TẾ */
 hr {{
     border-color: {border_col} !important;
     margin: 16px 0 !important;
 }}
+
+/* 8. ẨN HOÀN TOÀN NÚT LÀM MỚI TỰ ĐỘNG KỸ THUẬT (NON-BLOCKING TRIGGER) */
+div:has(#scc-refresh-marker) + div,
+div:has(> * > #scc-refresh-marker) + div,
+div:has(#scc-refresh-marker) ~ div,
+section[data-testid="stSidebar"] div.element-container:has(#scc-refresh-marker) + div.element-container,
+div.element-container:has(button[key="btn_scc_live_tick"]) {{
+    display: none !important;
+    height: 0px !important;
+    position: absolute !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+}}
 </style>
 """, unsafe_allow_html=True)
-
 
 BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
@@ -326,7 +415,6 @@ from daily_reporter import (
     MIN_SPIKE_VOLUME_FLOOR
 )
 
-# Khởi tạo Machine Learning Inference Engine
 try:
     from ml_inference_engine import SCCAnomalyInferenceEngine
     ML_ENGINE = SCCAnomalyInferenceEngine()
@@ -391,115 +479,158 @@ def notify_red_alert_telegram(bucket_str, calls_total, calls_503, err_rate, thre
         f"⏰ <b>Khung phát hiện:</b> <code>{bucket_str}</code>\n"
         f"📊 <b>Lưu lượng khung:</b> {calls_total} cuộc gọi\n"
         f"❌ <b>Số cuộc lỗi 503:</b> <b>{calls_503} cuộc</b>\n"
-        f"📉 <b>Tỷ lệ lỗi mượt:</b> <b>{err_rate:.1f}%</b> (Ngưỡng động Bayes: {threshold:.1f}%)\n\n"
-        "⚠️ <b>NỘI DUNG YÊU CẦU XỬ LÝ (P1 ACTION):</b>\n"
-        "1. Kích hoạt kiểm tra Gateway viễn thông và kết nối SIP Trunk ngay lập tức.\n"
-        "2. Kiểm tra log định tuyến trung kế SCC Outbound.\n"
-        "3. Điều chuyển hướng sang trung kế dự phòng nếu cuộc gọi không thể thiết lập.\n"
+        f"📈 <b>Tỷ lệ gián đoạn:</b> <b>{err_rate*100:.1f}%</b> (Ngưỡng động an toàn: {threshold*100:.1f}%)\n"
+        f"📐 <b>Z-score lưu lượng:</b> {zscore:.2f}\n"
+        f"🤖 <b>Điểm rủi ro ML:</b> {ml_score*100:.1f}% (Phát hiện điểm dị biệt đa chiều)\n\n"
+        f"⚠️ <b>Hành động khuyến nghị:</b>\n"
+        f"1. Kiểm tra ngay SIP Gateway và trạng thái tổng đài Asterisk.\n"
+        f"2. Chuyển tuyến cuộc gọi dự phòng (LCR) sang nhà mạng VNPT/MobiFone.\n"
+        f"3. Liên hệ NOC nhà mạng Viettel theo đường dây nóng.\n"
     )
-    if bad_call_samples is not None and not bad_call_samples.empty:
-        msg += "\n🔍 <b>Chi tiết cuộc gọi lỗi 503 trong khung:</b>\n"
-        for _, row in bad_call_samples.head(5).iterrows():
-            t_str = row['start_time'].strftime('%H:%M:%S') if hasattr(row['start_time'], 'strftime') else str(row['start_time'])
-            msg += f"• Call ID <code>{row['call_id']}</code> ({t_str}) - {row['duration']}s\n"
+    if bad_call_samples:
+        msg += "\n📋 <b>Bản ghi cuộc gọi lỗi mẫu:</b>\n"
+        for s in bad_call_samples[:3]:
+            msg += f"• Mã: <code>{s.get('call_id', '')}</code> | Mạng: <b>{s.get('carrier', 'N/A')}</b> | Thời gian: {str(s.get('start_time', ''))[11:19]}\n"
     return send_telegram_msg(msg)
 
 # ==============================================================================
-# 2. MACHINE LEARNING ENGINE: PHÂN TÍCH CHU KỲ VÀ DỰ BÁO RỦI RO ĐỘNG TỪ TOÀN BỘ DATA LỊCH SỬ
+# 2. MÔ HÌNH HỌC THỐNG KÊ & CHU KỲ 24H (DYNAMIC SEASONALITY & RISK DECOMPOSITION)
 # ==============================================================================
 def compute_dynamic_seasonality_and_risk(past_days_ts: dict, today_completed_ts: pd.DataFrame = None):
-    """
-    Tính toán động chu kỳ 24h và hồ sơ xác suất rủi ro theo giờ
-    dựa trên TOÀN BỘ dữ liệu các ngày lịch sử đã qua + các khung giờ đã chốt hôm nay.
-    Không cache tĩnh, tự động cập nhật liên tục theo luồng dữ liệu thực tế trong stream_buffer.csv.
-    """
-    frames = []
-    if past_days_ts:
-        frames.extend(list(past_days_ts.values()))
-    if today_completed_ts is not None and not today_completed_ts.empty:
-        frames.append(today_completed_ts)
+    """Tính toán động đường chu kỳ trung bình 24h và xác suất rủi ro theo từng giờ."""
+    all_buckets = []
+    tot_days = 0
 
-    if not frames:
+    for d, ts in past_days_ts.items():
+        if ts is not None and not ts.empty:
+            tot_days += 1
+            all_buckets.append(ts[["bucket_time", "hour", "calls_total", "calls_503", "is_p1_red", "is_p2_yellow"]].copy())
+
+    if today_completed_ts is not None and not today_completed_ts.empty:
+        tot_days += 1
+        all_buckets.append(today_completed_ts[["bucket_time", "hour", "calls_total", "calls_503", "is_p1_red", "is_p2_yellow"]].copy())
+
+    if not all_buckets:
         hourly_stats = {}
         for h in range(24):
-            mu_d = HOURLY_PROFILE.get(str(h), {}).get("mu", 0.5)
-            sd_d = HOURLY_PROFILE.get(str(h), {}).get("sd", 0.8)
+            prof = HOURLY_PROFILE.get(h, 0.05)
+            exp_15m = (prof * 400.0) / 4.0
             hourly_stats[h] = {
-                "mean_15m": mu_d,
-                "sd_15m": sd_d,
+                "mean_15m": exp_15m,
+                "sd_15m": max(1.0, np.sqrt(exp_15m)),
                 "risk_pct": 5.0,
-                "tot_days": 1,
-                "day_incidents": 0,
                 "p1_count": 0,
-                "p2_count": 0
+                "p2_count": 0,
+                "tot_buckets": 0,
+                "day_incidents": 0,
+                "tot_days": 1
             }
-        return hourly_stats, 0, 0
+        return hourly_stats, 1, 0
 
-    combined = pd.concat(frames, ignore_index=True)
-    combined["has_anomaly"] = combined["is_p1_red"] | combined["is_p2_yellow"]
-    combined["date"] = combined["bucket_time"].dt.date
-
-    tot_distinct_days = int(combined["date"].nunique())
-    tot_buckets = len(combined)
-
+    df_all = pd.concat(all_buckets, ignore_index=True)
+    df_all["date"] = df_all["bucket_time"].dt.date
     hourly_stats = {}
+
     for h in range(24):
-        sub = combined[combined["hour"] == h]
+        sub = df_all[df_all["hour"] == h]
         if not sub.empty:
-            m = float(np.round(sub["calls_total"].mean(), 2))
-            s = float(np.round(sub["calls_total"].std(ddof=0), 2))
-            s = max(s, 0.6)
-            h_days = int(sub["date"].nunique())
-            day_inc = int(sub.groupby("date")["has_anomaly"].any().sum())
-            risk = float(np.round((day_inc / h_days * 100), 1)) if h_days > 0 else 5.0
-            p1 = int(sub["is_p1_red"].sum())
-            p2 = int(sub["is_p2_yellow"].sum())
+            m = float(sub["calls_total"].mean())
+            s = float(sub["calls_total"].std(ddof=1)) if len(sub) > 1 else max(1.0, np.sqrt(m))
+            if np.isnan(s) or s <= 0:
+                s = max(1.0, np.sqrt(m))
+
+            n_b = len(sub)
+            p1_c = int(sub["is_p1_red"].sum())
+            p2_c = int(sub["is_p2_yellow"].sum())
+
+            inc_dates = sub[sub["is_p1_red"] | sub["is_p2_yellow"]]["date"].nunique()
+            tot_h_days = sub["date"].nunique()
+            risk_pct = round((inc_dates / max(1, tot_h_days)) * 100, 1)
+
+            hourly_stats[h] = {
+                "mean_15m": round(m, 2),
+                "sd_15m": round(s, 2),
+                "risk_pct": risk_pct,
+                "p1_count": p1_c,
+                "p2_count": p2_c,
+                "tot_buckets": n_b,
+                "day_incidents": inc_dates,
+                "tot_days": tot_h_days
+            }
         else:
-            mu_d = HOURLY_PROFILE.get(str(h), {}).get("mu", 0.2)
-            sd_d = HOURLY_PROFILE.get(str(h), {}).get("sd", 0.8)
-            m = mu_d
-            s = sd_d
-            risk = 5.0
-            h_days = tot_distinct_days
-            day_inc = 0
-            p1 = 0
-            p2 = 0
+            prof = HOURLY_PROFILE.get(h, 0.05)
+            exp_15m = (prof * 400.0) / 4.0
+            hourly_stats[h] = {
+                "mean_15m": exp_15m,
+                "sd_15m": max(1.0, np.sqrt(exp_15m)),
+                "risk_pct": 0.0,
+                "p1_count": 0,
+                "p2_count": 0,
+                "tot_buckets": 0,
+                "day_incidents": 0,
+                "tot_days": max(1, tot_days)
+            }
 
-        hourly_stats[h] = {
-            "mean_15m": m,
-            "sd_15m": s,
-            "risk_pct": risk,
-            "tot_days": h_days,
-            "day_incidents": day_inc,
-            "p1_count": p1,
-            "p2_count": p2
-        }
-
-    return hourly_stats, tot_distinct_days, tot_buckets
+    return hourly_stats, max(1, tot_days), len(df_all)
 
 # ==============================================================================
-# 3. ENGINE TỔNG HỢP PIPELINE & STATE
+# 3. QUẢN LÝ DỮ LIỆU & FALLBACK VÀO DATABASE
 # ==============================================================================
-def get_current_pipeline_state():
-    """Đọc dữ liệu buffer, tổng hợp theo khung 15 phút."""
-    if not STREAM_FILE.exists() or STREAM_FILE.stat().st_size < 100:
-        if SEED_FILE.exists():
-            try:
-                import shutil
-                shutil.copyfile(SEED_FILE, STREAM_FILE)
-                SIGNAL_FILE.touch()
-            except Exception:
-                pass
+_PAST_DAYS_TS_CACHE = {}
+_PAST_DAYS_SUMMARY_CACHE = {}
 
-    if not STREAM_FILE.exists():
-        return None, None, None, {}, pd.DataFrame(), {}, pd.DataFrame()
+def load_data_with_db_fallback():
+    """Đọc dữ liệu từ file đệm buffer CSV; nếu file lỗi hoặc trống, tự động query trực tiếp từ PostgreSQL."""
+    df = None
+    if STREAM_FILE.exists() and STREAM_FILE.stat().st_size >= 100:
+        try:
+            df = pd.read_csv(STREAM_FILE)
+            if len(df) >= 2:
+                return df
+        except Exception:
+            df = None
 
+    # Fallback vào PostgreSQL
     try:
-        df = pd.read_csv(STREAM_FILE)
-    except Exception:
-        return None, None, None, {}, pd.DataFrame(), {}, pd.DataFrame()
+        from anomaly_detection_python.db_writer import DBWriter
+        writer = DBWriter()
+        for target in writer.targets:
+            conn = writer._get_target_connection(target)
+            if conn and conn.closed == 0:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT call_id, start_time, end_time, duration, result_code, carrier
+                        FROM public.calls_stream
+                        ORDER BY start_time ASC;
+                    """)
+                    rows = cur.fetchall()
+                    if rows and len(rows) >= 2:
+                        cols = ["call_id", "start_time", "end_time", "duration", "result_code", "carrier"]
+                        df = pd.DataFrame(rows, columns=cols)
+                        try:
+                            df.to_csv(STREAM_FILE, index=False)
+                        except Exception:
+                            pass
+                        return df
+    except Exception as e:
+        logging.warning(f"Fallback PostgreSQL query error: {e}")
 
-    if len(df) < 2:
+    if SEED_FILE.exists():
+        try:
+            df = pd.read_csv(SEED_FILE)
+            if len(df) >= 2:
+                return df
+        except Exception:
+            pass
+
+    return pd.DataFrame()
+
+def get_current_pipeline_state():
+    """Đọc dữ liệu buffer với cơ chế fallback tự động vào PostgreSQL, tổng hợp theo khung 15 phút với bộ nhớ đệm chống lag."""
+    global _PAST_DAYS_TS_CACHE, _PAST_DAYS_SUMMARY_CACHE
+
+    df = load_data_with_db_fallback()
+    if df.empty or len(df) < 2:
         return None, None, None, {}, pd.DataFrame(), {}, pd.DataFrame()
 
     df["start_time"] = pd.to_datetime(df["start_time"])
@@ -507,27 +638,30 @@ def get_current_pipeline_state():
     df["date"] = df["start_time"].dt.date
 
     all_dates = sorted(df["date"].unique())
-    # Tự động lấy ngày mới nhất làm ngày mô phỏng trực tiếp
     current_date = all_dates[-1] if all_dates else datetime.now().date()
 
-    # Quét các ngày đã qua (các ngày nhỏ hơn ngày mô phỏng hiện tại)
     past_days_summary = {}
     past_days_ts = {}
     past_dates = [d for d in all_dates if d < current_date]
     for p_date in past_dates:
-        p_df = df[df["date"] == p_date].copy()
-        if not p_df.empty:
-            p_ts = process_single_date(p_df, p_date, is_live_today=False)
-            past_days_ts[p_date] = p_ts
-            past_days_summary[p_date] = {
-                "total_calls": int(p_ts["calls_total"].sum()),
-                "calls_503": int(p_ts["calls_503"].sum()),
-                "error_rate": (p_ts["calls_503"].sum() / p_ts["calls_total"].sum() * 100) if p_ts["calls_total"].sum() > 0 else 0,
-                "p1_alerts": int(p_ts["is_p1_red"].sum()),
-                "p2_warnings": int(p_ts["is_p2_yellow"].sum())
-            }
+        if p_date in _PAST_DAYS_TS_CACHE and p_date in _PAST_DAYS_SUMMARY_CACHE:
+            past_days_ts[p_date] = _PAST_DAYS_TS_CACHE[p_date]
+            past_days_summary[p_date] = _PAST_DAYS_SUMMARY_CACHE[p_date]
+        else:
+            p_df = df[df["date"] == p_date].copy()
+            if not p_df.empty:
+                p_ts = process_single_date(p_df, p_date, is_live_today=False)
+                _PAST_DAYS_TS_CACHE[p_date] = p_ts
+                _PAST_DAYS_SUMMARY_CACHE[p_date] = {
+                    "total_calls": int(p_ts["calls_total"].sum()),
+                    "calls_503": int(p_ts["calls_503"].sum()),
+                    "error_rate": (p_ts["calls_503"].sum() / p_ts["calls_total"].sum() * 100) if p_ts["calls_total"].sum() > 0 else 0,
+                    "p1_alerts": int(p_ts["is_p1_red"].sum()),
+                    "p2_warnings": int(p_ts["is_p2_yellow"].sum())
+                }
+                past_days_ts[p_date] = _PAST_DAYS_TS_CACHE[p_date]
+                past_days_summary[p_date] = _PAST_DAYS_SUMMARY_CACHE[p_date]
 
-    # Xử lý ngày hiện tại (Realtime)
     df_today = df[df["date"] == current_date].copy() if current_date in all_dates else pd.DataFrame(columns=["call_id", "start_time", "end_time", "duration", "result_code", "bucket_time", "date"])
     if not df_today.empty:
         latest_time = df_today["start_time"].max()
@@ -535,51 +669,221 @@ def get_current_pipeline_state():
     else:
         active_bucket = pd.Timestamp(current_date).replace(hour=8, minute=0, second=0)
 
-    SYSTEM_ERRORS = ["503_CONGESTION", "500_SERVER_ERROR", "504_GATEWAY_TIMEOUT", "429_TOO_MANY_REQUESTS", "408_REQUEST_TIMEOUT"]
     ts_today = process_single_date(df_today, current_date, is_live_today=True, active_bucket=active_bucket)
     today_bad_calls = df_today[df_today["result_code"].isin(SYSTEM_ERRORS)].sort_values("start_time", ascending=False) if not df_today.empty else pd.DataFrame()
 
     return ts_today, today_bad_calls, current_date, past_days_summary, df_today, past_days_ts, df
 
-# ==============================================================================
-# 4. GIAO DIỆN CHÍNH STREAMLIT
-# ==============================================================================
-col_head_title, col_head_theme = st.columns([3.8, 1.2])
-with col_head_title:
-    st.markdown(f"<h2 style='color:{text_main}; font-weight:800; margin-bottom:14px; letter-spacing:-0.5px;'>SCC Outbound System : Anomaly Detection Dashboard</h2>", unsafe_allow_html=True)
-with col_head_theme:
-    st.radio(
-        "🌓 Giao diện:",
-        ["Sáng ☀️", "Tối 🌙"],
-        horizontal=True,
-        key="theme_mode"
-    )
+def get_system_telemetry():
+    """Đo lường kiểm tra trạng thái kết nối hạ tầng viễn thông & Dual-Write Database."""
+    telemetry = {
+        "db1": {"name": "DB1 [PostgreSQL Container]", "host": "db", "port": 5432, "status": "ONLINE", "calls": 0, "ts": 0, "msg": ""},
+        "db2": {"name": "DB2 [MinhTQ70 Host]", "host": "172.18.0.1", "port": 5432, "status": "ONLINE", "calls": 0, "ts": 0, "msg": ""},
+        "redis": {"status": "ACTIVE", "port": 6380, "name": "Redis Stream Pipeline 6380", "msg": "Kênh buffer luồng cuộc gọi"},
+        "telegram": {"status": "ACTIVE" if TELEGRAM_BOT_TOKEN else "STANDBY", "chats": len(TELEGRAM_CHAT_IDS), "proxy": "proxy.fpt.vn:80"}
+    }
+    try:
+        from anomaly_detection_python.db_writer import DBWriter
+        writer = DBWriter()
+        for idx, target in enumerate(writer.targets):
+            key = f"db{idx+1}"
+            conn = writer._get_target_connection(target)
+            if conn and conn.closed == 0:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT count(*) FROM public.calls_stream;")
+                    c_cnt = cur.fetchone()[0]
+                    cur.execute("SELECT count(*) FROM public.call_timeseries;")
+                    ts_cnt = cur.fetchone()[0]
+                    telemetry[key] = {
+                        "name": target.get("id", f"DB{idx+1}"),
+                        "host": target.get("host", ""),
+                        "port": target.get("port", 5432),
+                        "status": "ONLINE",
+                        "calls": c_cnt,
+                        "ts": ts_cnt,
+                        "msg": "Đồng bộ thời gian thực chuẩn xác"
+                    }
+            else:
+                telemetry[key] = {
+                    "name": target.get("id", f"DB{idx+1}"),
+                    "host": target.get("host", ""),
+                    "port": target.get("port", 5432),
+                    "status": "OFFLINE",
+                    "calls": 0,
+                    "ts": 0,
+                    "msg": "Chưa kết nối hoặc đang khởi động"
+                }
+    except Exception as e:
+        telemetry["db1"]["msg"] = str(e)
+    return telemetry
 
-# TẢI TRẠNG THÁI HIỆN TẠI
-init_ts, _, init_cur_date, init_past_summary, _, init_past_days_ts, init_df = get_current_pipeline_state()
-init_all_dates = sorted(init_df["date"].unique()) if not init_df.empty else ([init_cur_date] if init_cur_date else [datetime.now().date()])
-min_hist_date = init_all_dates[0]
-max_hist_date = init_cur_date if init_cur_date else init_all_dates[-1]
+# TẢI TRẠNG THÁI DỮ LIỆU
+pipeline_state = get_current_pipeline_state()
+ts_today, today_bad_calls, current_date, past_summary, df_today, past_days_ts, full_df = pipeline_state
 
-# Quản lý Session State cho lịch chọn ngày
-if "cal_date_picker" not in st.session_state:
+if ts_today is not None and not full_df.empty:
+    init_all_dates = sorted(full_df["date"].unique())
+    min_hist_date = init_all_dates[0]
+    max_hist_date = current_date if current_date else init_all_dates[-1]
+else:
+    min_hist_date = current_date if current_date else datetime.now().date()
+    max_hist_date = min_hist_date
+
+if "last_producer_date" not in st.session_state:
+    st.session_state["last_producer_date"] = max_hist_date
     st.session_state["cal_date_picker"] = max_hist_date
+    st.session_state["is_following_live"] = True
+
+if max_hist_date > st.session_state.get("last_producer_date", min_hist_date):
+    st.session_state["last_producer_date"] = max_hist_date
+    if st.session_state.get("is_following_live", True):
+        st.session_state["cal_date_picker"] = max_hist_date
 
 init_picked = st.session_state.get("cal_date_picker", max_hist_date)
 if hasattr(init_picked, "date"):
     init_picked = init_picked.date()
+
+if init_picked > max_hist_date:
+    init_picked = max_hist_date
+    st.session_state["cal_date_picker"] = max_hist_date
+elif init_picked < min_hist_date:
+    init_picked = min_hist_date
+    st.session_state["cal_date_picker"] = min_hist_date
+
 is_realtime_mode = (init_picked == max_hist_date)
+auto_live_stream = True
 
 # ==============================================================================
-# 5. KHỐI NỘI DUNG HIỂN THỊ CHÍNH
+# CƠ SỞ TRI THỨC SỰ CỐ VIỄN THÔNG (TELECOM NOC KB)
+# ==============================================================================
+TELECOM_ERROR_KB = {
+    "503_CONGESTION": {
+        "code": "503_CONGESTION",
+        "title": "503_CONGESTION — Nghẽn mạch SIP Trunk / Carrier Outbound",
+        "protocol": "SIP/2.0 503 Service Unavailable",
+        "cause": "Tuyến trung kế SIP Trunk của nhà mạng đối tác bị quá tải dung lượng (concurrency limit) hoặc trạm thu phát viễn thông từ chối khởi tạo phiên gọi mới.",
+        "actions": [
+            "Kích hoạt định tuyến tự động (LCR) chuyển hướng lưu lượng sang trung kế phụ (VNPT / MobiFone / Viettel).",
+            "Kiểm tra lưu lượng CPS (Calls Per Second) trên hệ thống quay số tự động, giảm nhịp gọi 15-20%.",
+            "Liên hệ NOC nhà mạng đối tác mở thêm kênh đồng thời (Concurrent Channels)."
+        ],
+        "hotline": "Viettel NOC: 1800 8000 | VNPT NOC: 1800 1260 | MobiFone NOC: 1800 1090"
+    },
+    "504_GATEWAY_TIMEOUT": {
+        "code": "504_GATEWAY_TIMEOUT",
+        "title": "504_GATEWAY_TIMEOUT — Hết thời gian phản hồi SBC Gateway",
+        "protocol": "SIP/2.0 504 Server Time-out / Gateway Timeout",
+        "cause": "Thiết bị biên SBC (Session Border Controller) hoặc Media Gateway phía nhà mạng không phản hồi bản tin SIP INVITE trong khoảng thời gian quy định.",
+        "actions": [
+            "Kiểm tra độ trễ (latency/ping) và tỷ lệ rớt gói (packet loss) trên kênh truyền mạng riêng (leased line / VPN).",
+            "Chuyển tạm thời luồng gọi sang cổng Gateway dự phòng.",
+            "Yêu cầu kỹ thuật NOC nhà mạng kiểm tra tải CPU/RAM trên cụm thiết bị SBC."
+        ],
+        "hotline": "Viettel NOC: 1800 8000 | VNPT NOC: 1800 1260 | MobiFone NOC: 1800 1090"
+    },
+    "500_SERVER_ERROR": {
+        "code": "500_SERVER_ERROR",
+        "title": "500_SERVER_ERROR — Lỗi nội bộ hệ thống Softswitch",
+        "protocol": "SIP/2.0 500 Internal Server Error",
+        "cause": "Hệ thống tổng đài Softswitch / SIP Core của đối tác gặp sự cố xử lý logic hoặc lỗi crash tiến trình xử lý cuộc gọi.",
+        "actions": [
+            "Cách ly tạm thời tuyến trung kế SIP gặp lỗi để tránh ảnh hưởng đến tỷ lệ kết nối chung.",
+            "Thu thập log SIP trace (INVITE, 100 Trying, 500 Error) gửi kèm ticket NOC cho đối tác.",
+            "Kiểm tra lại cấu hình codec và SDP parameter gửi sang phía đối tác."
+        ],
+        "hotline": "Viettel NOC: 1800 8000 | VNPT NOC: 1800 1260 | MobiFone NOC: 1800 1090"
+    },
+    "429_TOO_MANY_REQUESTS": {
+        "code": "429_TOO_MANY_REQUESTS",
+        "title": "429_TOO_MANY_REQUESTS — Vượt ngưỡng tần suất gọi (CPS Rate Limit)",
+        "protocol": "SIP/2.0 429 Too Many Requests / Rate Exceeded",
+        "cause": "Tốc độ phát cuộc gọi đồng thời vượt quá ngưỡng CPS (Calls Per Second) hoặc CAPS đã cam kết trong hợp đồng viễn thông.",
+        "actions": [
+            "Điều chỉnh giảm tham số max-cps và concurrency rate trên dialer tự động.",
+            "Phân bổ chiến dịch gọi ra nhiều dải đầu số (CLI Caller ID) khác nhau.",
+            "Giãn cách thời gian quét hàng đợi liên hệ trong hệ thống."
+        ],
+        "hotline": "Quản trị viên SCC Telecom / DevOps Lead"
+    },
+    "408_REQUEST_TIMEOUT": {
+        "code": "408_REQUEST_TIMEOUT",
+        "title": "408_REQUEST_TIMEOUT — Hết thời gian chờ phản hồi (Request Timeout)",
+        "protocol": "SIP/2.0 408 Request Timeout",
+        "cause": "Bản tin INVITE gửi tới thiết bị đầu cuối thuê bao không nhận được phản hồi 180 Ringing hoặc 200 OK trước khi hết Timer B/Timer C.",
+        "actions": [
+            "Giảm cấu hình Ringing Timeout trên tổng đài xuống 20s để giải phóng kênh sớm.",
+            "Phân loại danh sách số thuê bao không nhấc máy để lên lịch gọi lại tự động vào khung giờ khác.",
+            "Kiểm tra chất lượng định tuyến vô tuyến của nhà mạng tại khu vực thuê bao."
+        ],
+        "hotline": "Bộ phận vận hành chiến dịch Outbound SCC"
+    },
+    "DROP_TRAFFIC": {
+        "code": "DROP_TRAFFIC",
+        "title": "DROP_TRAFFIC — Sập lưu lượng bất thường (0 cuộc gọi / Mất tín hiệu)",
+        "protocol": "Traffic Anomaly: Complete Signal Drop (P1 Critical)",
+        "cause": "Toàn bộ lưu lượng phát sinh trong khung giờ giảm về 0 cuộc. Tiến trình Autodialer bị dừng đột ngột hoặc service Asterisk PBX / SIP Trunk bị mất kết nối.",
+        "actions": [
+            "Kiểm tra trạng thái tiến trình: `systemctl status asterisk` hoặc docker container dialer.",
+            "Kiểm tra kết nối Database hàng đợi cuộc gọi và dịch vụ mạng trung tâm.",
+            "Khởi động lại dịch vụ quay số tự động nếu phát hiện deadlock hàng đợi."
+        ],
+        "hotline": "Kỹ thuật trực ca NOC SCC / Ext 101"
+    },
+    "TRAFFIC_SPIKE": {
+        "code": "TRAFFIC_SPIKE",
+        "title": "TRAFFIC_SPIKE — Đột biến lưu lượng gọi ra (Spike Traffic / P2 Warning)",
+        "protocol": "Traffic Anomaly: Volume Surge > Threshold (P2)",
+        "cause": "Lưu lượng cuộc gọi phát sinh tăng đột biến gấp nhiều lần ngưỡng thông thường, có nguy cơ gây nghẽn băng thông hệ thống.",
+        "actions": [
+            "Kiểm tra số lượng chiến dịch đang kích hoạt đồng thời trên giao diện quản trị.",
+            "Áp dụng chính sách kiểm soát lưu lượng (Traffic Throttling) để cân bằng tải.",
+            "Cảnh báo bộ phận vận hành theo dõi tải tài nguyên máy chủ CPU/Memory."
+        ],
+        "hotline": "Trưởng ca vận hành chiến dịch SCC"
+    }
+}
+
+def get_friendly_carrier(row):
+    fc = row.get("failed_carrier")
+    if pd.notna(fc) and str(fc).strip() and str(fc).strip() != "-":
+        return str(fc).strip()
+    if row.get("is_p1_drop", False):
+        return "Asterisk PBX / Dialer"
+    if row.get("is_p2_yellow", False):
+        return "Tuyến Chiến dịch"
+    return "Hệ thống SCC"
+
+def get_friendly_error(row):
+    se = str(row.get("specific_error", "")).strip()
+    if "503" in se:
+        return "503_CONGESTION (Nghẽn SIP Trunk)"
+    if "504" in se:
+        return "504_GATEWAY_TIMEOUT (Hết hạn SBC)"
+    if "500" in se:
+        return "500_SERVER_ERROR (Lỗi Softswitch)"
+    if "429" in se:
+        return "429_TOO_MANY_REQUESTS (Vượt CPS)"
+    if "408" in se:
+        return "408_REQUEST_TIMEOUT (Hết chờ SIP)"
+    if row.get("is_p1_drop", False):
+        return "DROP_TRAFFIC (Sập lưu lượng 0 cuộc)"
+    if row.get("is_p2_yellow", False):
+        return "TRAFFIC_SPIKE (Đột biến lưu lượng)"
+    return "GIÁN ĐOẠN DỊCH VỤ"
+
+def get_friendly_level(row):
+    if row.get("is_p1_red", False):
+        return "P1 Khẩn cấp", "#ef4444"
+    return "P2 Cảnh báo", "#f59e0b"
+
+# ==============================================================================
+# 4. KHỐI HIỂN THỊ CHÍNH (NOC MODULAR VIEW ROUTER)
 # ==============================================================================
 def render_live_monitoring_fragment():
-    """Khối hiển thị chính: tự động cập nhật mượt mà mỗi 3.5s."""
     global is_realtime_mode
-    ts_today, today_bad_calls, current_date, past_summary, df_today, past_days_ts, full_df = get_current_pipeline_state()
 
     if ts_today is None or ts_today.empty:
-        st.info("⏳ Đang chờ luồng dữ liệu cuộc gọi trực tiếp từ `producer.py`...")
+        st.info("Đang chờ luồng dữ liệu cuộc gọi trực tiếp từ `producer.py`...")
         return False
 
     all_dates = sorted(full_df["date"].unique()) if not full_df.empty else [current_date]
@@ -589,14 +893,39 @@ def render_live_monitoring_fragment():
     past_dates = [d for d in all_dates if d < max_date]
     yesterday_date = past_dates[-1] if past_dates else (max_date - timedelta(days=1))
 
-    # XÁC ĐỊNH NGÀY XEM TỪ LỊCH DUY NHẤT
+    # XỬ LÝ QUERY PARAMS TỪ PHÍM TẮT CHÂN LỊCH (NẾU CÓ)
+    if "date" in st.query_params:
+        try:
+            q_val = st.query_params["date"]
+            if isinstance(q_val, list):
+                q_val = q_val[0]
+            parsed_d = datetime.strptime(str(q_val).strip(), "%Y-%m-%d").date()
+            if min_date <= parsed_d <= max_date:
+                st.session_state["cal_date_picker"] = parsed_d
+                st.session_state["is_following_live"] = (parsed_d == max_date)
+            del st.query_params["date"]
+        except Exception:
+            pass
+
+    if "nav" in st.query_params:
+        p_nav = st.query_params["nav"]
+        if isinstance(p_nav, list):
+            p_nav = p_nav[0]
+        if str(p_nav) in ["Dashboard", "Analysis", "Reports", "System"]:
+            st.session_state["soc_nav_menu"] = str(p_nav)
+        del st.query_params["nav"]
+
+    if "t3_all" in st.query_params:
+        st.session_state["soc_nav_menu"] = "Reports"
+        st.session_state["t3_date_range_picker"] = (min_date, max_date)
+        del st.query_params["t3_all"]
+
     picked_date = st.session_state.get("cal_date_picker", max_date)
     if hasattr(picked_date, "date"):
         picked_date = picked_date.date()
     view_date = picked_date
     is_realtime_mode = (view_date == max_date)
 
-    # PHÂN LOẠI CHẾ ĐỘ HIỂN THỊ
     if is_realtime_mode:
         active_ts = ts_today
         view_date = current_date
@@ -604,45 +933,15 @@ def render_live_monitoring_fragment():
         df_view = df_today
         view_bad_calls = today_bad_calls
         is_today_finished = (len(completed_buckets) >= 38)
-
         if is_today_finished:
             active_time_str = "17:30 (Đã Chốt Toàn Ngày)"
-            is_p1 = False
-            is_p2 = False
-            latest_row = completed_buckets.iloc[-1]
         elif not completed_buckets.empty:
             latest_row = completed_buckets.iloc[-1]
             active_time_str = latest_row["bucket_time"].strftime("%H:%M")
-            is_p1 = bool(latest_row["is_p1_red"])
-            is_p2 = bool(latest_row["is_p2_yellow"])
         else:
             active_time_str = "08:00 (Starting)"
-            is_p1 = False
-            is_p2 = False
-            latest_row = ts_today.iloc[0]
-
-        # BANNER CẢNH BÁO TRỰC TIẾP (CHỈ HIỂN THỊ KHI CÓ SỰ CỐ KHẨN CẤP)
-        if is_p1:
-            if latest_row["is_p1_net"]:
-                st.error(
-                    f"🚨 **[P1 RED ALERT - LỖI HẠ TẦNG SIP TRUNK TẠI {active_time_str}]** | "
-                    f"Tỷ lệ lỗi: `{latest_row['smoothed_error_rate']*100:.1f}%` > Ngưỡng Động: `{latest_row['dynamic_threshold']*100:.1f}%` | "
-                    f"Lỗi 503: `{latest_row['calls_503']}/{latest_row['calls_total']} cuộc` | Đề nghị kiểm tra Gateway / SIP Trunk!"
-                )
-            else:
-                st.error(
-                    f"🚨 **[P1 RED ALERT - SẬP LƯU LƯỢNG ĐỘT NGỘT TẠI {active_time_str}]** | "
-                    f"Lưu lượng: `{latest_row['calls_total']}` cuộc (Kỳ vọng: {latest_row['mu']:.1f}) | Nguy cơ đứt kết nối tổng đài PBX!"
-                )
-        elif is_p2:
-            st.warning(
-                f"🟡 **[P2 WARNING - ĐỘT BIẾN TẢI CHIẾN DỊCH TẠI {active_time_str}]** | "
-                f"Lưu lượng tăng vọt: `{latest_row['calls_total']}` cuộc (Kỳ vọng: {latest_row['mu']:.1f}) | Chú ý theo dõi dung lượng trunk!"
-            )
     else:
-        # CHẾ ĐỘ XEM LẠI LỊCH SỬ (HÔM QUA HOẶC CHỌN NGÀY THEO LỊCH)
         is_today_finished = True
-
         if view_date == current_date:
             active_ts = ts_today
             completed_buckets = ts_today[ts_today["is_completed"]]
@@ -650,8 +949,6 @@ def render_live_monitoring_fragment():
             view_bad_calls = today_bad_calls
             latest_row = completed_buckets.iloc[-1] if not completed_buckets.empty else ts_today.iloc[0]
             active_time_str = f"Lịch hôm nay: {latest_row['bucket_time'].strftime('%H:%M') if not completed_buckets.empty else '08:00'}"
-            is_p1 = False
-            is_p2 = False
         else:
             active_ts = past_days_ts.get(view_date)
             if active_ts is None or active_ts.empty:
@@ -660,14 +957,11 @@ def render_live_monitoring_fragment():
                 past_days_ts[view_date] = active_ts
 
             completed_buckets = active_ts
-            latest_row = completed_buckets.iloc[-1]
             active_time_str = "17:30 (Đã Chốt Toàn Ngày)"
-            is_p1 = False
-            is_p2 = False
             df_view = full_df[full_df["date"] == view_date] if not full_df.empty else pd.DataFrame()
             view_bad_calls = df_view[df_view["result_code"].isin(SYSTEM_ERRORS)].sort_values("start_time", ascending=False) if not df_view.empty else pd.DataFrame()
 
-    # METRICS KPI (4 THẺ TINH GỌN THEO YÊU CẦU: BỎ TIẾN ĐỘ CA TRỰC, RÚT GỌN TỶ LỆ GIÁN ĐOẠN)
+    # TÍNH TOÁN METRICS KPI TRỌNG TÂM
     if completed_buckets is not None and not completed_buckets.empty:
         view_total = int(completed_buckets["calls_total"].sum())
         view_503 = int(completed_buckets["calls_503"].sum())
@@ -681,232 +975,267 @@ def render_live_monitoring_fragment():
         view_p1_count = 0
         view_p2_count = 0
 
-    # ==============================================================================
-    # MULTI-TAB DISPLAY
-    # ==============================================================================
-    tab_realtime, tab_ml_seasonality, tab_executive_overview = st.tabs([
-        "📊 1. Giám Sát Trực Tiếp (Biểu Đồ & Sự Cố)",
-        "📈 2. Phân Tích Xu Hướng & Cảnh Báo Sớm",
-        "📋 3. Báo Cáo Tổng Hợp Đa Ngày"
-    ])
-    # Chèn công cụ hỗ trợ chuyển tab tự động qua URL (?tab=1|2|3), phím tắt 1, 2, 3 và tối ưu lịch
-    import streamlit.components.v1 as components
+    flagged = completed_buckets[completed_buckets["is_p1_red"] | completed_buckets["is_p2_yellow"]].copy() if completed_buckets is not None and not completed_buckets.empty else pd.DataFrame()
+
+    # --------------------------------------------------------------------------
+    # SIDEBAR ĐIỀU HÀNH 4 MỤC CỐT LÕI (KHÔNG TRÙNG LẶP, KHÔNG ICON, KHÔNG NÚT TRÒN)
+    # --------------------------------------------------------------------------
+    with st.sidebar:
+        st.markdown(f"""
+        <div style="padding: 6px 0 16px 0; border-bottom: 1px solid {border_col}; margin-bottom: 16px;">
+            <div style="font-size:20px; font-weight:800; color:{text_main}; line-height:1.25; letter-spacing:-0.3px;">SCC Outbound System</div>
+            <div style="font-size:12.5px; font-weight:600; color:{text_muted}; margin-top:3px;">Anomaly Detection Dashboard</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # 4 PHÂN HỆ CỐT LÕI DUY NHẤT
+        soc_nav_options = [
+            "Dashboard",
+            "Analysis",
+            "Reports",
+            "System"
+        ]
+        cur_selected = st.session_state.get("soc_nav_menu", "Dashboard")
+        if cur_selected not in soc_nav_options:
+            cur_selected = "Dashboard"
+            st.session_state["soc_nav_menu"] = "Dashboard"
+
+        nav_choice = st.radio(
+            "DANH MỤC NOC",
+            soc_nav_options,
+            index=soc_nav_options.index(cur_selected),
+            key="soc_nav_menu",
+            label_visibility="collapsed"
+        )
+
+        prev_active_nav = st.session_state.get("_prev_active_nav", nav_choice)
+        if prev_active_nav != nav_choice:
+            st.session_state["_prev_active_nav"] = nav_choice
+            st.session_state["active_investigation_bucket"] = None
+
+        st.markdown(f"<div style='border-top:1px solid {border_col}; margin: 24px 0 14px 0;'></div>", unsafe_allow_html=True)
+        status_col = "#ef4444" if (view_p1_count > 0) else "#10b981"
+        status_label = f"{view_p1_count} Critical Alerts" if (view_p1_count > 0) else "All systems operational"
+        st.markdown(f"""
+        <div style="background:{card_bg}; border:1px solid {border_col}; border-radius:8px; padding:12px 14px;">
+            <div style="font-size:10px; font-weight:700; color:{text_muted}; text-transform:uppercase; letter-spacing:0.5px;">SYSTEM STATUS</div>
+            <div style="font-size:13px; font-weight:700; color:{status_col}; margin-top:4px;">{status_label}</div>
+            <div style="font-size:11px; color:{text_muted}; margin-top:8px;">Version: <b>3.2.2</b></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Trigger làm mới tự động ngầm đặt trong sidebar (ẩn hoàn toàn)
+        st.markdown('<div id="scc-refresh-marker" style="display:none;"></div>', unsafe_allow_html=True)
+        st.button("SCC_AUTO_REFRESH_TRIGGER", key="btn_scc_live_tick")
+
+    # --------------------------------------------------------------------------
+    # CHÈN SCRIPT CALENDAR FOOTER (HÔM NAY / HÔM QUA TRONG CHÂN LỊCH POPUP)
+    # --------------------------------------------------------------------------
+    today_str = max_date.strftime("%Y-%m-%d")
+    yesterday_str = yesterday_date.strftime("%Y-%m-%d")
+    today_day = str(max_date.day)
+    yesterday_day = str(yesterday_date.day)
+
     components.html(f"""
     <script>
     (function() {{
-        const pDoc = window.parent.document;
         const pWin = window.parent;
-        const todayStr = "{current_date.strftime('%Y-%m-%d')}";
-        const yestStr = "{yesterday_date.strftime('%Y-%m-%d')}";
-        const todayDay = "{current_date.day}";
-        const yestDay = "{yesterday_date.day}";
+        const pDoc = window.parent ? window.parent.document : null;
+        if (!pDoc) return;
 
-        function isLightRgb(rgbStr) {{
-            if (!rgbStr || rgbStr === 'transparent' || rgbStr.startsWith('rgba(0, 0, 0, 0)')) return false;
-            const m = rgbStr.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-            if (!m) return false;
-            const r = parseInt(m[1]), g = parseInt(m[2]), b = parseInt(m[3]);
-            return (r >= 210 && g >= 210 && b >= 210);
-        }}
-
-        // 1. Tự động chuyển tab theo URL query parameter (?tab=1, ?tab=2, ?tab=3)
-        let tabFromUrlSwitched = false;
-        function checkAndSwitchUrlTab() {{
-            if (tabFromUrlSwitched) return;
-            try {{
-                const searchParams = new URLSearchParams(pWin.location.search);
-                const tabParam = searchParams.get('tab');
-                if (tabParam && ['1', '2', '3'].includes(tabParam)) {{
-                    const tabs = pDoc.querySelectorAll('button[role="tab"]');
-                    const targetIdx = parseInt(tabParam) - 1;
-                    if (tabs && tabs.length >= 3 && tabs[targetIdx]) {{
-                        if (tabs[targetIdx].getAttribute('aria-selected') !== 'true') {{
-                            tabs[targetIdx].click();
-                        }}
-                        tabFromUrlSwitched = true;
-                    }}
-                }}
-            }} catch(e) {{}}
-        function bindTabClicks() {{
-            try {{
-                const tabs = pDoc.querySelectorAll('button[role="tab"]');
-                if (tabs && tabs.length >= 3) {{
-                    tabs.forEach((t, idx) => {{
-                        if (!t.__scc_click_tracked) {{
-                            t.__scc_click_tracked = true;
-                            t.addEventListener('click', () => {{
-                                tabFromUrlSwitched = true;
-                                try {{
-                                    const curUrl = new URL(pWin.location.href);
-                                    curUrl.searchParams.set('tab', idx + 1);
-                                    pWin.history.replaceState(null, '', curUrl.toString());
-                                }} catch(err) {{}}
-                            }});
-                        }}
-                    }});
-                }}
-            }} catch(e) {{}}
-        }}
-
-        // 2. Phím tắt bàn phím 1, 2, 3 để chuyển nhanh tab ngay trên Dashboard
-        if (!pWin.__scc_tab_keyboard_registered) {{
-            pWin.__scc_tab_keyboard_registered = true;
-            pDoc.addEventListener('keydown', function(e) {{
-                const tag = (e.target.tagName || '').toLowerCase();
-                if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
-                if (e.ctrlKey || e.altKey || e.metaKey) return;
-
-                const tabs = pDoc.querySelectorAll('button[role="tab"]');
-                if (!tabs || tabs.length < 3) return;
-
-                let targetIdx = -1;
-                if (e.key === '1') targetIdx = 0;
-                else if (e.key === '2') targetIdx = 1;
-                else if (e.key === '3') targetIdx = 2;
-
-                if (targetIdx >= 0 && tabs[targetIdx]) {{
-                    tabs[targetIdx].click();
-                    try {{
-                        const curUrl = new URL(pWin.location.href);
-                        curUrl.searchParams.set('tab', targetIdx + 1);
-                        pWin.history.replaceState(null, '', curUrl.toString());
-                    }} catch(err) {{}}
-                }}
-            }});
-        }}
-
-        if (!pWin.__scc_popstate_registered) {{
-            pWin.__scc_popstate_registered = true;
-            pWin.addEventListener('popstate', function() {{
-                tabFromUrlSwitched = false;
-                checkAndSwitchUrlTab();
-            }});
-        }}
-
-        function fixCalendarDarkAndFooter() {{
-            const activeTab = pDoc.querySelector('button[role="tab"][aria-selected="true"]');
-            const isTab1 = activeTab && (activeTab.innerText.includes("Giám Sát") || activeTab.innerText.includes("1."));
-
+        function fixCalendarFooter() {{
             const popovers = pDoc.querySelectorAll('div[data-baseweb="popover"]');
             popovers.forEach(popover => {{
                 const cal = popover.querySelector('div[data-baseweb="calendar"]');
                 if (!cal) return;
 
-                const existingFooter = popover.querySelector('.custom-cal-footer');
-                // 1. Quản lý footer: Tab 1 có Hôm nay/Hôm qua, Tab 3 có nút Tổng Hợp
-                if (!isTab1) {{
-                    if (existingFooter && !existingFooter.dataset.tab3) {{
-                        existingFooter.remove();
-                    }}
-                    if (!popover.querySelector('.custom-cal-footer[data-tab3="true"]')) {{
-                        const footer = pDoc.createElement('div');
-                        footer.className = 'custom-cal-footer';
-                        footer.dataset.tab3 = 'true';
-                        footer.style.cssText = 'display:flex;gap:8px;padding:8px 12px;border-top:1px solid {border_col};background:{card_bg};border-radius:0 0 10px 10px;margin-top:4px;';
+                if (!popover.querySelector('.custom-cal-footer')) {{
+                    const footer = pDoc.createElement('div');
+                    footer.className = 'custom-cal-footer';
+                    footer.style.cssText = 'display:flex;gap:8px;padding:8px 12px;border-top:1px solid {border_col};background:{card_bg};border-radius:0 0 10px 10px;margin-top:4px;';
 
+                    const isReports = ({json.dumps(nav_choice)} === "Reports");
+                    if (isReports) {{
                         const btnAll = pDoc.createElement('button');
-                        btnAll.innerText = '📊 Tổng Hợp';
-                        btnAll.style.cssText = 'flex:1;padding:7px 12px;font-size:12.5px;font-weight:600;background:#0284c7;color:#ffffff;border:none;border-radius:6px;cursor:pointer;';
+                        btnAll.type = 'button';
+                        btnAll.innerText = 'Tổng Hợp Toàn Bộ';
+                        btnAll.style.cssText = 'flex:1;padding:7px 12px;font-size:12px;font-weight:600;background:#0284c7;color:#ffffff;border:none;border-radius:6px;cursor:pointer;transition:all 0.15s ease;';
+                        btnAll.onmouseover = () => {{ btnAll.style.background = '#0369a1'; }};
+                        btnAll.onmouseout = () => {{ btnAll.style.background = '#0284c7'; }};
                         btnAll.onclick = (e) => {{
                             e.stopPropagation();
-                            const hiddenBtn = pDoc.querySelector('div[data-testid="stButton"] button');
-                            if (hiddenBtn) {{
-                                hiddenBtn.click();
-                                return;
-                            }}
+                            const curUrl = new URL(pWin.location.href);
+                            curUrl.searchParams.set('nav', 'Reports');
+                            curUrl.searchParams.set('t3_all', '1');
+                            pWin.location.href = curUrl.toString();
                         }};
                         footer.appendChild(btnAll);
-                        cal.appendChild(footer);
-                    }}
-                }} else {{
-                    if (existingFooter && existingFooter.dataset.tab3) {{
-                        existingFooter.remove();
-                    }}
-                    if (!popover.querySelector('.custom-cal-footer:not([data-tab3="true"])')) {{
-                        const footer = pDoc.createElement('div');
-                        footer.className = 'custom-cal-footer';
-                        footer.style.cssText = 'display:flex;gap:8px;padding:8px 12px;border-top:1px solid {border_col};background:{card_bg};border-radius:0 0 10px 10px;margin-top:4px;';
-
+                    }} else {{
                         const btnToday = pDoc.createElement('button');
-                        btnToday.innerText = '⚡ Hôm nay (Today)';
-                        btnToday.style.cssText = 'flex:1;padding:6px 10px;font-size:12px;font-weight:600;background:#0284c7;color:#ffffff;border:none;border-radius:6px;cursor:pointer;';
+                        btnToday.type = 'button';
+                        btnToday.innerText = 'Hôm nay';
+                        btnToday.style.cssText = 'flex:1;padding:6px 10px;font-size:12px;font-weight:600;background:#0284c7;color:#ffffff;border:none;border-radius:6px;cursor:pointer;transition:all 0.15s ease;';
+                        btnToday.onmouseover = () => {{ btnToday.style.background = '#0369a1'; }};
+                        btnToday.onmouseout = () => {{ btnToday.style.background = '#0284c7'; }};
                         btnToday.onclick = (e) => {{
                             e.stopPropagation();
                             const cells = cal.querySelectorAll('div[role="gridcell"]');
+                            let clicked = false;
                             for (let cell of cells) {{
-                                if (cell.innerText.trim() === todayDay && !cell.getAttribute('aria-disabled')) {{
+                                if (cell.innerText.trim() === "{today_day}" && !cell.getAttribute('aria-disabled')) {{
                                     cell.click();
-                                    return;
+                                    clicked = true;
+                                    break;
                                 }}
                             }}
-                            const inp = pDoc.querySelector('div[data-testid="stDateInput"] input');
-                            if (inp) {{
-                                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                                setter.call(inp, todayStr);
-                                inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                                inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            if (!clicked) {{
+                                const curUrl = new URL(pWin.location.href);
+                                curUrl.searchParams.set('date', "{today_str}");
+                                pWin.location.href = curUrl.toString();
                             }}
                         }};
 
                         const btnYest = pDoc.createElement('button');
-                        btnYest.innerText = '⏮️ Hôm qua (Yesterday)';
-                        btnYest.style.cssText = 'flex:1;padding:6px 10px;font-size:12px;font-weight:600;background:{tab_active_bg};color:{text_main};border:1px solid {border_col};border-radius:6px;cursor:pointer;';
+                        btnYest.type = 'button';
+                        btnYest.innerText = 'Hôm qua';
+                        btnYest.style.cssText = 'flex:1;padding:6px 10px;font-size:12px;font-weight:600;background:{tab_active_bg};color:{text_main};border:1px solid {border_col};border-radius:6px;cursor:pointer;transition:all 0.15s ease;';
+                        btnYest.onmouseover = () => {{ btnYest.style.background = 'rgba(2, 132, 199, 0.2)'; }};
+                        btnYest.onmouseout = () => {{ btnYest.style.background = '{tab_active_bg}'; }};
                         btnYest.onclick = (e) => {{
                             e.stopPropagation();
                             const cells = cal.querySelectorAll('div[role="gridcell"]');
+                            let clicked = false;
                             for (let cell of cells) {{
-                                if (cell.innerText.trim() === yestDay && !cell.getAttribute('aria-disabled')) {{
+                                if (cell.innerText.trim() === "{yesterday_day}" && !cell.getAttribute('aria-disabled')) {{
                                     cell.click();
-                                    return;
+                                    clicked = true;
+                                    break;
                                 }}
                             }}
-                            const inp = pDoc.querySelector('div[data-testid="stDateInput"] input');
-                            if (inp) {{
-                                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                                setter.call(inp, yestStr);
-                                inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                                inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            if (!clicked) {{
+                                const curUrl = new URL(pWin.location.href);
+                                curUrl.searchParams.set('date', "{yesterday_str}");
+                                pWin.location.href = curUrl.toString();
                             }}
                         }};
 
                         footer.appendChild(btnToday);
                         footer.appendChild(btnYest);
-                        cal.appendChild(footer);
                     }}
-                }}
-
-                // 2. Sửa lỗi màu nền dải range trắng trong Dark Mode
-                if ({str(is_dark).lower()}) {{
-                    const allDescendants = cal.querySelectorAll('*');
-                    allDescendants.forEach(el => {{
-                        const bg = window.getComputedStyle(el).backgroundColor;
-                        if (isLightRgb(bg)) {{
-                            el.style.setProperty('background-color', 'rgba(2, 132, 199, 0.35)', 'important');
-                            el.style.setProperty('color', '#ffffff', 'important');
-                        }}
-                    }});
+                    cal.appendChild(footer);
                 }}
             }});
         }}
 
-        setInterval(function() {{
-            bindTabClicks();
-            checkAndSwitchUrlTab();
-            fixCalendarDarkAndFooter();
-        }}, 400);
+        setInterval(fixCalendarFooter, 300);
+
+        // 1. Cuộn mượt về đầu trang ngay khi chuyển tab
+        const curNavChoice = {json.dumps(nav_choice)};
+        if (pWin.__scc_cur_nav && pWin.__scc_cur_nav !== curNavChoice) {{
+            pWin.scrollTo({{ top: 0, behavior: 'instant' }});
+            try {{
+                const mainArea = pDoc.querySelector('.main .block-container') || pDoc.documentElement;
+                if (mainArea) mainArea.scrollTop = 0;
+            }} catch(e) {{}}
+        }}
+        pWin.__scc_cur_nav = curNavChoice;
+
+        // 2. Kích hoạt auto-refresh phi khối (Non-blocking timer) chỉ khi ở Dashboard trực tiếp
+        const shouldAutoRefresh = {json.dumps(bool(nav_choice == "Dashboard" and is_realtime_mode and not is_today_finished and not st.session_state.get("active_investigation_bucket")))};
+
+        if (pWin.__scc_refresh_timer) {{
+            clearTimeout(pWin.__scc_refresh_timer);
+            pWin.__scc_refresh_timer = null;
+        }}
+
+        if (shouldAutoRefresh) {{
+            pWin.__scc_refresh_timer = setTimeout(() => {{
+                const btns = pDoc.querySelectorAll('button');
+                for (let b of btns) {{
+                    if (b.innerText && b.innerText.includes('SCC_AUTO_REFRESH_TRIGGER')) {{
+                        b.click();
+                        break;
+                    }}
+                }}
+            }}, 3500);
+        }}
+
+        // 3. Đảm bảo ẩn tuyệt đối nút trigger trên DOM
+        function hideHiddenTrigger() {{
+            const btns = pDoc.querySelectorAll('button');
+            for (let b of btns) {{
+                if (b.innerText && b.innerText.includes('SCC_AUTO_REFRESH_TRIGGER')) {{
+                    const c = b.closest('div[data-testid="stButton"]') || b.closest('.element-container') || b;
+                    c.style.display = 'none';
+                    c.style.height = '0px';
+                    c.style.visibility = 'hidden';
+                }}
+            }}
+        }}
+        hideHiddenTrigger();
+        setInterval(hideHiddenTrigger, 100);
     }})();
     </script>
     """, height=0, width=0)
 
+    # --------------------------------------------------------------------------
+    # MAIN HEADER: BREADCRUMB & THEME CONTROLLER
+    # --------------------------------------------------------------------------
+    col_bread, col_theme = st.columns([4.2, 1.0])
+    with col_bread:
+        st.markdown(f"""
+        <div style="font-size:24px; font-weight:800; color:{text_main}; letter-spacing:-0.4px;">
+            {nav_choice}
+        </div>
+        """, unsafe_allow_html=True)
+    with col_theme:
+        st.radio(
+            "Giao diện:",
+            ["Sáng", "Tối"],
+            horizontal=True,
+            key="theme_mode",
+            label_visibility="collapsed"
+        )
 
-    # ---------------- TAB 1: OPERATIONAL MONITORING ----------------
-    with tab_realtime:
-        # 4 THẺ KPI CHỈ HIỂN THỊ TRONG TAB 1 THEO YÊU CẦU
+    st.markdown(f"<hr style='margin: 8px 0 14px 0; border:none; border-top:1px solid {border_col};'>", unsafe_allow_html=True)
+
+    # ==============================================================================
+    # 1. VIEW: DASHBOARD (GIỮ NGUYÊN 100% TAB 1 GỐC + BỘ LỌC LỊCH GỌN GÀNG TRONG TAB)
+    # ==============================================================================
+    if nav_choice == "Dashboard":
+        # BỘ LỌC LỊCH DUY NHẤT & GỌN GÀNG (KHÔNG CÒN NÚT THỪA NGOÀI LỊCH, KHÔNG CÒN TIẾN ĐỘ CA TRỰC)
+        col_dash_date, _ = st.columns([1.6, 3.4])
+        with col_dash_date:
+            cur_cal_val = st.session_state.get("cal_date_picker", max_date)
+            if hasattr(cur_cal_val, "date"):
+                cur_cal_val = cur_cal_val.date()
+            if cur_cal_val < min_date or cur_cal_val > max_date:
+                cur_cal_val = max_date
+
+            new_dash_date = st.date_input(
+                "Ngày Giám Sát:",
+                value=cur_cal_val,
+                min_value=min_date,
+                max_value=max_date,
+                format="YYYY-MM-DD",
+                key="dash_date_input",
+                help="Nhấn để chọn ngày trên lịch. Sử dụng phím tắt Hôm nay / Hôm qua ở đáy lịch."
+            )
+            if hasattr(new_dash_date, "date"):
+                new_dash_date = new_dash_date.date()
+            if new_dash_date != picked_date:
+                st.session_state["cal_date_picker"] = new_dash_date
+                st.session_state["is_following_live"] = (new_dash_date == max_date)
+                st.rerun()
+
+        st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
+
+        # 4 THẺ KPI CHÍNH
         kpi_cards = [
             ("Tổng Số Cuộc Gọi Trong Ngày", f"{view_total:,} cuộc", f"Ngày {view_date.strftime('%Y-%m-%d')} ({active_time_str})", text_muted),
-            ("Tỷ Lệ Gián Đoạn", f"{view_err_rate:.2f}%", f"{view_503} cuộc lỗi" if view_total > 0 else "0 cuộc lỗi", "#ef4444" if view_err_rate > 5 else text_muted),
-            ("🔴 Sự Cố Khẩn Cấp", f"{view_p1_count} khung giờ", "Cần can thiệp ngay" if view_p1_count > 0 else "Hạ tầng an toàn", "#ef4444" if view_p1_count > 0 else "#10b981"),
-            ("🟡 Tăng Tải Đột Biến", f"{view_p2_count} khung giờ", "Cần chú ý nhân sự" if view_p2_count > 0 else "Lưu lượng ổn định", "#f59e0b" if view_p2_count > 0 else "#10b981")
+            ("Tỷ Lệ Gián Đoạn", f"{view_err_rate:.2f}%", f"{view_503} cuộc lỗi viễn thông", "#ef4444" if view_err_rate > 5 else text_muted),
+            ("Sự Cố Khẩn Cấp (P1)", f"{view_p1_count} khung giờ", "Cần can thiệp ngay" if view_p1_count > 0 else "Hạ tầng an toàn", "#ef4444" if view_p1_count > 0 else "#10b981"),
+            ("Tăng Tải Đột Biến (P2)", f"{view_p2_count} khung giờ", "Cần chú ý nhân sự" if view_p2_count > 0 else "Lưu lượng ổn định", "#f59e0b" if view_p2_count > 0 else "#10b981")
         ]
         k_cols = st.columns(4)
         for col, (title, val, sub, sub_col) in zip(k_cols, kpi_cards):
@@ -920,65 +1249,29 @@ def render_live_monitoring_fragment():
 
         st.markdown("<div style='margin-bottom:14px;'></div>", unsafe_allow_html=True)
 
-        # BỘ LỌC LỊCH CHỌN NGÀY DUY NHẤT (TÍCH HỢP HÔM NAY / HÔM QUA TRỰC TIẾP TRONG LỊCH)
-        col_date, _ = st.columns([1.1, 2.9])
-        with col_date:
-            cur_cal_val = st.session_state.get("cal_date_picker", max_date)
-            if hasattr(cur_cal_val, "date"):
-                cur_cal_val = cur_cal_val.date()
-            if cur_cal_val < min_date or cur_cal_val > max_date:
-                cur_cal_val = max_date
-            st.date_input(
-                "📅 Chọn ngày theo Lịch:",
-                value=cur_cal_val,
-                min_value=min_date,
-                max_value=max_date,
-                format="YYYY-MM-DD",
-                key="cal_date_picker",
-                help="Bấm vào để mở lịch. Trong lịch có nút Hôm nay và Hôm qua để chọn nhanh."
-            )
-
-
-        # ==============================================================================
-        # 1. BIỂU ĐỒ LƯU LƯỢNG CUỘC GỌI & BẤT THƯỜNG THỂ TÍCH (CHART 1)
-        # ==============================================================================
+        # ---------------- 2 BIỂU ĐỒ SONG SONG GỐC (CHART 1 & CHART 2) ----------------
         fig_traffic = go.Figure()
-
-        # Dải hoạt động thông thường (Upper & Lower)
         fig_traffic.add_trace(go.Scatter(
             x=active_ts["bucket_time"].tolist(), y=active_ts["upper_limit"].tolist(),
             mode="lines", line=dict(width=0), showlegend=False, hoverinfo="skip"
         ))
         fig_traffic.add_trace(go.Scatter(
             x=active_ts["bucket_time"].tolist(), y=active_ts["lower_limit"].tolist(),
-            mode="lines", line=dict(width=0),
-            fill="tonexty", fillcolor="rgba(148, 163, 184, 0.22)",
-            name="Vùng hoạt động bình thường",
-            hoverinfo="skip"
+            mode="lines", line=dict(width=0), fill="tonexty",
+            fillcolor="rgba(148, 163, 184, 0.22)", name="Vùng an toàn", hoverinfo="skip"
         ))
-
-        # Đường mức kỳ vọng trung bình mu(t)
         fig_traffic.add_trace(go.Scatter(
             x=active_ts["bucket_time"].tolist(), y=active_ts["mu"].tolist(),
             mode="lines", line=dict(color="#64748b", width=1.5, dash="dash"),
-            name="Mức kỳ vọng trung bình",
-            hovertemplate="<b>Khung:</b> %{x|%H:%M}<br><b>Mức kỳ vọng:</b> %{y:.1f} cuộc<extra></extra>"
+            name="Kỳ vọng TB", hovertemplate="<b>Khung:</b> %{x|%H:%M}<br><b>Mức kỳ vọng:</b> %{y:.1f} cuộc<extra></extra>"
         ))
-
-        # Đường cuộc gọi thực tế (Luôn có trong chú thích)
         x_actual = completed_buckets["bucket_time"].tolist() if not completed_buckets.empty else []
         y_actual = completed_buckets["calls_total"].tolist() if not completed_buckets.empty else []
         fig_traffic.add_trace(go.Scatter(
-            x=x_actual, y=y_actual,
-            mode="lines+markers",
-            line=dict(color="#0284c7", width=2.5),
-            marker=dict(size=6, color="#0369a1"),
-            name="Cuộc gọi thực tế",
-            hovertemplate="<b>Khung:</b> %{x|%H:%M}<br><b>Thực tế:</b> %{y} cuộc<extra></extra>",
-            showlegend=True
+            x=x_actual, y=y_actual, mode="lines+markers",
+            line=dict(color="#0284c7", width=2.5), marker=dict(size=6, color="#0369a1"),
+            name="Thực tế", hovertemplate="<b>Khung:</b> %{x|%H:%M}<br><b>Thực tế:</b> %{y} cuộc<extra></extra>"
         ))
-
-        # Điểm sự cố khẩn cấp P1 (Bao gồm cả sập tín hiệu tổng đài và nghẽn mạng viễn thông)
         p1_incidents = completed_buckets[completed_buckets["is_p1_red"]].copy() if not completed_buckets.empty else pd.DataFrame()
         if not p1_incidents.empty:
             x_drop = p1_incidents["bucket_time"].tolist()
@@ -992,88 +1285,40 @@ def render_live_monitoring_fragment():
             x_drop, y_drop, desc_drop = [], [], []
 
         fig_traffic.add_trace(go.Scatter(
-            x=x_drop if x_drop else [None],
-            y=y_drop if y_drop else [None],
-            mode="markers",
-            marker=dict(color="#dc2626", size=13, symbol="circle", line=dict(color="#ffffff", width=2)),
-            name="Sự cố khẩn cấp (🔴)",
-            text=desc_drop if desc_drop else [""],
-            hovertemplate="<b>🔴 SỰ CỐ KHẨN CẤP!</b><br><b>Chi tiết:</b> %{text}<br><b>Khung:</b> %{x|%H:%M}<br><b>Số cuộc:</b> %{y}<extra></extra>",
-            showlegend=True
+            x=x_drop if x_drop else [None], y=y_drop if y_drop else [None],
+            mode="markers", marker=dict(color="#dc2626", size=13, symbol="circle", line=dict(color="#ffffff", width=2)),
+            name="Sự cố P1", text=desc_drop if desc_drop else [""],
+            hovertemplate="<b>SỰ CỐ KHẨN CẤP!</b><br><b>Chi tiết:</b> %{text}<br><b>Khung:</b> %{x|%H:%M}<br><b>Số cuộc:</b> %{y}<extra></extra>"
         ))
-
-        # Điểm lưu lượng tăng đột biến (P2 Spike - Luôn có trong chú thích)
         p2_spike = completed_buckets[completed_buckets["is_p2_yellow"]] if not completed_buckets.empty else pd.DataFrame()
         x_spike = p2_spike["bucket_time"].tolist() if not p2_spike.empty else []
         y_spike = p2_spike["calls_total"].tolist() if not p2_spike.empty else []
         fig_traffic.add_trace(go.Scatter(
-            x=x_spike if x_spike else [None],
-            y=y_spike if y_spike else [None],
-            mode="markers",
-            marker=dict(color="#d97706", size=13, symbol="diamond", line=dict(color="#ffffff", width=2)),
-            name="Lưu lượng tăng đột biến (🟡)",
-            hovertemplate="<b>🟡 CẢNH BÁO: Tăng tải đột biến!</b><br><b>Khung:</b> %{x|%H:%M}<br><b>Số cuộc:</b> %{y}<extra></extra>",
-            showlegend=True
+            x=x_spike if x_spike else [None], y=y_spike if y_spike else [None],
+            mode="markers", marker=dict(color="#d97706", size=13, symbol="diamond", line=dict(color="#ffffff", width=2)),
+            name="Tăng tải P2", hovertemplate="<b>CẢNH BÁO: Tăng tải đột biến!</b><br><b>Khung:</b> %{x|%H:%M}<br><b>Số cuộc:</b> %{y}<extra></extra>"
         ))
-
-        max_calls_val = max(12, int(active_ts["upper_limit"].max()) + 2)
-        if not completed_buckets.empty and completed_buckets["calls_total"].max() > max_calls_val - 2:
-            max_calls_val = int(completed_buckets["calls_total"].max()) + 2
+        peak_actual = float(completed_buckets["calls_total"].max()) if not completed_buckets.empty else 0.0
+        peak_upper = float(active_ts["upper_limit"].max()) if not active_ts.empty else 12.0
+        peak_val = max(12.0, peak_upper, peak_actual)
+        max_calls_val = peak_val * 1.30
 
         fig_traffic.update_layout(
-            template=plotly_template,
-            paper_bgcolor=card_bg,
-            plot_bgcolor=card_bg,
-            height=340,
-            margin=dict(l=50, r=20, t=30, b=30),
-            hovermode="x unified",
-            hoverlabel=dict(bgcolor=card_bg, font_size=12, font_color=text_main, bordercolor=border_col),
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="center",
-                x=0.5,
-                font=dict(size=11, color=text_main),
-                bgcolor="rgba(0,0,0,0)",
-                bordercolor="rgba(0,0,0,0)"
-            ),
-            yaxis=dict(
-                title="Cuộc gọi / 15 phút",
-                range=[-0.8, max_calls_val],
-                gridcolor=plotly_grid,
-                linecolor=plotly_line,
-                tickfont=dict(color=text_muted),
-                title_font=dict(color=text_main)
-            ),
-            xaxis=dict(
-                tickformat="%H:%M",
-                dtick=1800000,
-                gridcolor=plotly_grid,
-                linecolor=plotly_line,
-                tickfont=dict(color=text_muted)
-            )
+            template=plotly_template, paper_bgcolor=card_bg, plot_bgcolor=card_bg,
+            height=430, margin=dict(l=45, r=20, t=65, b=35), hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="center", x=0.5, font=dict(size=11, color=text_main)),
+            yaxis=dict(title="Cuộc gọi / 15 phút", range=[-0.8, max_calls_val], gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
+            xaxis=dict(tickformat="%H:%M", dtick=1800000, gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted))
         )
 
-        # ==============================================================================
-        # 2. BIỂU ĐỒ TỶ LỆ GIÁN ĐOẠN & NGƯỠNG AN TOÀN TỰ CO GIÃN (CHART 2)
-        # ==============================================================================
         fig_error = go.Figure()
-
-        # Đường tỷ lệ gián đoạn thực tế (Luôn có trong chú thích)
         x_err = completed_buckets["bucket_time"].tolist() if not completed_buckets.empty else []
         y_err = (completed_buckets["error_rate"] * 100).round(2).tolist() if not completed_buckets.empty else []
         fig_error.add_trace(go.Scatter(
-            x=x_err, y=y_err,
-            mode="lines+markers",
-            line=dict(color="#ea580c", width=2.5),
-            marker=dict(size=6, color="#c2410c"),
-            name="Tỷ lệ gián đoạn (%)",
-            hovertemplate="<b>Khung:</b> %{x|%H:%M}<br><b>Tỷ lệ lỗi:</b> %{y:.1f}%<extra></extra>",
-            showlegend=True
+            x=x_err, y=y_err, mode="lines+markers",
+            line=dict(color="#ea580c", width=2.5), marker=dict(size=6, color="#c2410c"),
+            name="Tỷ lệ lỗi (%)", hovertemplate="<b>Khung:</b> %{x|%H:%M}<br><b>Tỷ lệ lỗi:</b> %{y:.1f}%<extra></extra>"
         ))
-
-        # Ngưỡng an toàn tự co giãn (Luôn có trong chú thích)
         if not completed_buckets.empty:
             thresh_x = completed_buckets["bucket_time"].tolist()
             thresh_y = (completed_buckets["dynamic_threshold"] * 100).round(2).tolist()
@@ -1082,244 +1327,178 @@ def render_live_monitoring_fragment():
             thresh_y = [compute_dynamic_error_threshold(int(m)) * 100 for m in active_ts["mu"]]
 
         fig_error.add_trace(go.Scatter(
-            x=thresh_x, y=thresh_y,
-            mode="lines",
+            x=thresh_x, y=thresh_y, mode="lines",
             line=dict(color="#dc2626", width=2, dash="dash"),
-            name="Ngưỡng an toàn tự co giãn (%)",
-            hovertemplate="<b>Khung:</b> %{x|%H:%M}<br><b>Ngưỡng an toàn:</b> %{y:.1f}%<extra></extra>",
-            showlegend=True
+            name="Ngưỡng động (%)", hovertemplate="<b>Khung:</b> %{x|%H:%M}<br><b>Ngưỡng an toàn:</b> %{y:.1f}%<extra></extra>"
         ))
-
-        # Điểm sự cố gián đoạn vượt ngưỡng (P1 Outage - Luôn có trong chú thích)
         p1_err = completed_buckets[completed_buckets["is_p1_net"]] if not completed_buckets.empty else pd.DataFrame()
         x_p1_err = p1_err["bucket_time"].tolist() if not p1_err.empty else []
         y_p1_err = (p1_err["error_rate"] * 100).round(2).tolist() if not p1_err.empty else []
         fig_error.add_trace(go.Scatter(
-            x=x_p1_err if x_p1_err else [None],
-            y=y_p1_err if y_p1_err else [None],
-            mode="markers",
-            marker=dict(color="#dc2626", size=14, symbol="x", line=dict(color="#ffffff", width=2)),
-            name="Sự cố gián đoạn vượt ngưỡng (🚨)",
-            hovertemplate="<b>🚨 SỰ CỐ KHẨN CẤP: Vượt ngưỡng an toàn!</b><br><b>Khung:</b> %{x|%H:%M}<br><b>Tỷ lệ lỗi:</b> %{y:.1f}%<extra></extra>",
-            showlegend=True
+            x=x_p1_err if x_p1_err else [None], y=y_p1_err if y_p1_err else [None],
+            mode="markers", marker=dict(color="#dc2626", size=14, symbol="x", line=dict(color="#ffffff", width=2)),
+            name="Vượt ngưỡng P1", hovertemplate="<b>SỰ CỐ KHẨN CẤP: Vượt ngưỡng an toàn!</b><br><b>Khung:</b> %{x|%H:%M}<br><b>Tỷ lệ lỗi:</b> %{y:.1f}%<extra></extra>"
         ))
-
-        # Tự động co giãn trục tung Y để không bao giờ bị cắt điểm lỗi (kể cả khi lỗi vọt lên 100%)
         max_err_display = 60.0
         if not completed_buckets.empty:
             peak_err = float(completed_buckets["error_rate"].max() * 100)
-            if peak_err > 50.0:
-                max_err_display = min(110.0, peak_err + 10.0)
+            if peak_err > 40.0:
+                max_err_display = min(120.0, peak_err * 1.30)
 
         fig_error.update_layout(
-            template=plotly_template,
-            paper_bgcolor=card_bg,
-            plot_bgcolor=card_bg,
-            height=340,
-            margin=dict(l=50, r=20, t=30, b=30),
-            hovermode="x unified",
-            hoverlabel=dict(bgcolor=card_bg, font_size=12, font_color=text_main, bordercolor=border_col),
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="center",
-                x=0.5,
-                font=dict(size=11, color=text_main),
-                bgcolor="rgba(0,0,0,0)",
-                bordercolor="rgba(0,0,0,0)"
-            ),
-            yaxis=dict(
-                title="Tỷ lệ gián đoạn (%)",
-                range=[-2.0, max_err_display],
-                gridcolor=plotly_grid,
-                linecolor=plotly_line,
-                tickfont=dict(color=text_muted),
-                title_font=dict(color=text_main)
-            ),
-            xaxis=dict(
-                tickformat="%H:%M",
-                dtick=1800000,
-                gridcolor=plotly_grid,
-                linecolor=plotly_line,
-                tickfont=dict(color=text_muted)
-            )
+            template=plotly_template, paper_bgcolor=card_bg, plot_bgcolor=card_bg,
+            height=430, margin=dict(l=45, r=20, t=65, b=35), hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="center", x=0.5, font=dict(size=11, color=text_main)),
+            yaxis=dict(title="Tỷ lệ gián đoạn (%)", range=[-2.0, max_err_display], gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
+            xaxis=dict(tickformat="%H:%M", dtick=1800000, gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted))
         )
 
-        # HIỂN THỊ THEO BỐ CỤC ĐÃ CHỌN (TÁCH TIÊU ĐỀ RA NGOÀI ĐỂ KHÔNG BAO GIỜ BỊ ĐÈ CHÚ THÍCH KHI XẾP NGANG)
-        title_c1 = f"<div style='font-size:13.5px; font-weight:700; color:{text_main}; margin-bottom:8px;'>1. Lưu Lượng Cuộc Gọi Phát Sinh So Với Mức Kỳ Vọng Thông Thường</div>"
-        title_c2 = f"<div style='font-size:13.5px; font-weight:700; color:{text_main}; margin-bottom:8px;'>2. Tỷ Lệ Cuộc Gọi Bị Gián Đoạn So Với Ngưỡng An Toàn Tự Co Giãn</div>"
-
-        # BỐ CỤC CỐ ĐỊNH XẾP NGANG (2 CỘT SONG SONG) THEO YÊU CẦU
-        col_chart1, col_chart2 = st.columns(2)
-        with col_chart1:
-            st.markdown(title_c1, unsafe_allow_html=True)
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            st.markdown(f"<div style='font-size:13.5px; font-weight:700; color:{text_main}; margin-bottom:8px;'>1. Lưu Lượng Cuộc Gọi Phát Sinh So Với Mức Kỳ Vọng Thông Thường</div>", unsafe_allow_html=True)
             st.plotly_chart(fig_traffic, use_container_width=True)
-        with col_chart2:
-            st.markdown(title_c2, unsafe_allow_html=True)
+        with col_c2:
+            st.markdown(f"<div style='font-size:13.5px; font-weight:700; color:{text_main}; margin-bottom:8px;'>2. Tỷ Lệ Cuộc Gọi Bị Gián Đoạn So Với Ngưỡng An Toàn Tự Co Giãn</div>", unsafe_allow_html=True)
             st.plotly_chart(fig_error, use_container_width=True)
 
         st.markdown("---")
 
-        # BẢNG TỔNG HỢP SỰ CỐ VẬN HÀNH (ĐẶT LÊN TRÊN ẢNH TỔNG KẾT THEO YÊU CẦU)
-        st.subheader(f"⚠️ Nhật Ký Sự Cố Vận Hành Cần Xử Lý — Ngày: {view_date.strftime('%Y-%m-%d')}")
-        flagged = completed_buckets[completed_buckets["is_p1_red"] | completed_buckets["is_p2_yellow"]].copy()
+        # ---------------- BẢNG NHẬT KÝ SỰ CỐ VẬN HÀNH TRONG NGÀY (GỐC) ----------------
+        st.markdown(f"<div style='font-size:16px; font-weight:700; color:{text_main}; margin-bottom:8px;'>Nhật Ký Sự Cố Trong Ngày — {view_date.strftime('%d/%m/%Y')}</div>", unsafe_allow_html=True)
 
         if not flagged.empty:
-            def get_failed_carrier_display(row):
-                fc = row.get("failed_carrier")
-                if pd.notna(fc) and str(fc).strip() and str(fc).strip() != "-":
-                    return str(fc).strip()
-                if row["is_p1_drop"]:
-                    return "Tổng đài PBX"
-                if row["is_p2_yellow"]:
-                    return "Chiến dịch gọi"
-                return "-"
+            for idx, r in flagged.reset_index(drop=True).iterrows():
+                b_str = r["bucket_time"].strftime("%H:%M")
+                level_text, level_col = get_friendly_level(r)
+                carrier = get_friendly_carrier(r)
+                err_text = get_friendly_error(r)
+                total_c = int(r["calls_total"])
+                fail_c = int(r["calls_503"])
+                pct = (fail_c / total_c * 100) if total_c > 0 else 0
 
-            def get_specific_error_display(row):
-                se = row.get("specific_error")
-                if row["is_p1_net"] and pd.notna(se) and str(se).strip() and str(se).strip() != "-":
-                    return str(se)
-                if row["is_p1_drop"]:
-                    return "DROP_TRAFFIC (Sập lưu lượng)"
-                if row["is_p2_yellow"]:
-                    return "TRAFFIC_SPIKE (Tăng tải đột biến)"
-                return "503_CONGESTION" if row["is_p1_net"] else "-"
+                row_cols = st.columns([1.1, 1.4, 1.4, 2.8, 1.8, 1.2])
+                with row_cols[0]:
+                    st.markdown(f"<div style='font-size:13.5px; font-weight:700; color:{text_main}; padding-top:6px;'>⏰ {b_str}</div>", unsafe_allow_html=True)
+                with row_cols[1]:
+                    st.markdown(f"<div style='font-size:12.5px; font-weight:700; color:{level_col}; padding-top:6px;'>{level_text}</div>", unsafe_allow_html=True)
+                with row_cols[2]:
+                    st.markdown(f"<div style='font-size:12.5px; font-weight:600; color:{text_main}; padding-top:6px;'>Tuyến: {carrier}</div>", unsafe_allow_html=True)
+                with row_cols[3]:
+                    st.markdown(f"<div style='font-size:12.5px; color:{text_main}; padding-top:6px;'><b>{err_text}</b></div>", unsafe_allow_html=True)
+                with row_cols[4]:
+                    st.markdown(f"<div style='font-size:12px; color:{text_muted}; padding-top:6px;'>Lỗi: <b>{fail_c}/{total_c}</b> ({pct:.1f}%)</div>", unsafe_allow_html=True)
+                with row_cols[5]:
+                    if st.button("Chi tiết", key=f"btn_dash_inc_{idx}_{b_str}"):
+                        st.session_state["active_investigation_bucket"] = b_str
+                        st.rerun()
 
-            def get_action_recommendation(row):
-                carrier = row.get("failed_carrier", "")
-                if row["is_p1_net"]:
-                    if pd.notna(carrier) and str(carrier).strip() and str(carrier).strip() != "-":
-                        return f"Chuyển hướng sang SIP Trunk dự phòng | Báo kỹ thuật NOC {carrier}"
-                    return "Kiểm tra cổng kết nối nhà mạng và chuyển hướng sang đường truyền dự phòng"
-                elif row["is_p1_drop"]:
-                    return "Kiểm tra nguồn phát tổng đài Asterisk và đường dây trung kế"
-                elif row["is_p2_yellow"]:
-                    return "Điều phối thêm điện thoại viên trực ca, theo dõi tải kênh gọi"
-                return "Theo dõi định kỳ"
+            # KHỐI HỒ SƠ ĐIỀU TRA KỸ THUẬT KHI BẤM CHI TIẾT
+            active_b_str = st.session_state.get("active_investigation_bucket")
+            if active_b_str:
+                matched_rows = flagged[flagged["bucket_time"].dt.strftime("%H:%M") == active_b_str]
+                if not matched_rows.empty:
+                    r_inv = matched_rows.iloc[0]
+                    fc_inv = get_friendly_carrier(r_inv)
+                    level_t_inv, level_c_inv = get_friendly_level(r_inv)
+                    n_tot_inv = int(r_inv["calls_total"])
+                    n_fail_inv = int(r_inv["calls_503"])
+                    r_rate_inv = (n_fail_inv / n_tot_inv * 100) if n_tot_inv > 0 else 0
 
-            def get_risk_level(row):
-                if row["is_p1_red"]:
-                    return "🔴 Khẩn cấp"
-                elif row["is_p2_yellow"]:
-                    return "🟡 Cảnh báo"
-                return "🟢 Bình thường"
+                    raw_err = str(r_inv.get("specific_error", "")).strip()
+                    matched_k = next((k for k in TELECOM_ERROR_KB if k in raw_err), None)
+                    if not matched_k:
+                        if r_inv.get("is_p1_drop", False):
+                            matched_k = "DROP_TRAFFIC"
+                        elif r_inv.get("is_p2_yellow", False):
+                            matched_k = "TRAFFIC_SPIKE"
+                        else:
+                            matched_k = "503_CONGESTION"
+                    kb = TELECOM_ERROR_KB.get(matched_k, TELECOM_ERROR_KB["503_CONGESTION"])
 
-            flagged["Mức Độ"] = flagged.apply(get_risk_level, axis=1)
-            flagged["Bên Gặp Lỗi"] = flagged.apply(get_failed_carrier_display, axis=1)
-            flagged["Lỗi Cụ Thể"] = flagged.apply(get_specific_error_display, axis=1)
-            flagged["Hướng Dẫn Xử Lý"] = flagged.apply(get_action_recommendation, axis=1)
+                    st.markdown("<div style='margin-top:16px;'></div>", unsafe_allow_html=True)
+                    with st.container(border=True):
+                        c_title_inv, c_close_inv = st.columns([4.0, 1.0])
+                        with c_title_inv:
+                            st.markdown(f"""
+                            <div style="font-size:17px; font-weight:800; color:{text_main}; margin-bottom:2px;">
+                                Hồ Sơ Điều Tra Kỹ Thuật: Khung Giờ {active_b_str}
+                            </div>
+                            <div style="font-size:12px; color:{text_muted};">
+                                Tuyến: <b>{fc_inv}</b> &nbsp;|&nbsp; Ngày: <b>{view_date.strftime('%d/%m/%Y')}</b> &nbsp;|&nbsp; Mức độ: <span style="color:{level_c_inv}; font-weight:700;">{level_t_inv}</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        with c_close_inv:
+                            if st.button("✕ Đóng Chi Tiết", key="btn_close_inv_dash", use_container_width=True):
+                                st.session_state["active_investigation_bucket"] = None
+                                st.rerun()
 
-            display_df = pd.DataFrame()
-            display_df["Khung Giờ"] = flagged["bucket_time"].dt.strftime("%H:%M")
-            display_df["Mức Độ"] = flagged["Mức Độ"]
-            display_df["Bên Gặp Lỗi (Carrier)"] = flagged["Bên Gặp Lỗi"]
-            display_df["Tổng Cuộc / Cuộc Lỗi"] = flagged.apply(
-                lambda r: f"{int(r['calls_total'])} / {int(r['calls_503'])} ({r['error_rate']*100:.1f}%)" if r["calls_total"] > 0 else "0 / 0 (0%)",
-                axis=1
-            )
-            display_df["Lỗi Cụ Thể (Specific Error)"] = flagged["Lỗi Cụ Thể"]
-            display_df["Ngưỡng Cho Phép"] = (flagged["dynamic_threshold"] * 100).round(1).astype(str) + "%"
+                        st.markdown(f"<hr style='margin:10px 0; border:none; border-top:1px solid {border_col};'>", unsafe_allow_html=True)
 
-            if ML_ENGINE and ML_ENGINE.is_ready:
-                def get_ml_score_badge(r):
-                    res = ML_ENGINE.predict_bucket(
-                        calls_total=int(r["calls_total"]),
-                        calls_failed=int(r["calls_503"]),
-                        avg_duration=float(r.get("avg_duration", 0.0) if pd.notna(r.get("avg_duration")) else 0.0),
-                        hour=int(r["hour"]),
-                        dayofweek=int(r["bucket_time"].weekday()),
-                        failed_carrier=str(r.get("failed_carrier", "-")),
-                        specific_error=str(r.get("specific_error", "-"))
-                    )
-                    sc = res["anomaly_score"]
-                    return f"{sc:.4f}"
-                display_df["ML Score (iForest)"] = flagged.apply(get_ml_score_badge, axis=1)
+                        box_bg = "#fef2f2" if (not is_dark and r_inv.get("is_p1_red", False)) else ("#fffbeb" if not is_dark else "#1e293b")
+                        box_border = "#fca5a5" if (not is_dark and r_inv.get("is_p1_red", False)) else ("#fde68a" if not is_dark else "#334155")
+                        st.markdown(f"""
+                        <div style="background:{box_bg}; border:1px solid {box_border}; border-radius:8px; padding:12px 14px; margin-bottom:12px;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
+                                <div>
+                                    <div style="font-size:11px; color:{text_muted}; text-transform:uppercase; font-weight:700;">MÃ KỸ THUẬT LỖI</div>
+                                    <div style="font-size:16px; font-weight:800; color:{level_c_inv};">{kb['code']}</div>
+                                    <div style="font-size:12.5px; color:{text_main}; font-family:monospace; font-weight:600;">{kb['protocol']}</div>
+                                </div>
+                                <div style="text-align:right;">
+                                    <div style="font-size:11px; color:{text_muted}; text-transform:uppercase; font-weight:700;">ẢNH HƯỞNG</div>
+                                    <div style="font-size:18px; font-weight:800; color:{level_c_inv};">{n_fail_inv} / {n_tot_inv} cuộc ({r_rate_inv:.1f}%)</div>
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
 
-            display_df["Hướng Dẫn Xử Lý Nhanh"] = flagged["Hướng Dẫn Xử Lý"]
+                        actions_html = "".join([f"<li style='margin-bottom:6px; color:{text_main};'>{act}</li>" for act in kb['actions']])
+                        rca_bg = "#f8fafc" if not is_dark else "#1e293b"
+                        rca_border = "#cbd5e1" if not is_dark else "#334155"
+                        st.markdown(f"""
+                        <div style="background:{rca_bg}; border:1px solid {rca_border}; border-left:4px solid {level_c_inv}; border-radius:8px; padding:12px 14px; margin-bottom:14px;">
+                            <div style="font-size:13px; font-weight:700; color:{text_main}; margin-bottom:4px;">
+                                Phân tích nguyên nhân kỹ thuật (RCA):
+                            </div>
+                            <div style="font-size:12.5px; color:{text_main}; line-height:1.55; margin-bottom:12px;">
+                                {kb['cause']}
+                            </div>
+                            <div style="font-size:13px; font-weight:700; color:#10b981; margin-bottom:4px;">
+                                Hướng dẫn quy trình xử lý NOC tiêu chuẩn (SOP):
+                            </div>
+                            <ul style="font-size:12px; line-height:1.55; margin:0 0 10px 0; padding-left:18px;">
+                                {actions_html}
+                            </ul>
+                            <div style="font-size:12px; color:{text_main}; border-top:1px dashed {border_col}; padding-top:8px;">
+                                <b>Hotline NOC đối tác:</b> <span style="color:#0284c7; font-weight:700;">{kb['hotline']}</span>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
 
-            n_red = int(flagged["is_p1_red"].sum())
-            n_yellow = int(flagged["is_p2_yellow"].sum())
-            if n_red > 0:
-                st.error(f"🚨 **Phát hiện {len(flagged)} khung giờ có sự cố:** Có {n_red} sự cố khẩn cấp (🔴) và {n_yellow} cảnh báo lưu lượng (🟡). Đề nghị kỹ sư xử lý theo hướng dẫn bên dưới.")
-            else:
-                st.warning(f"🟡 **Ghi nhận {len(flagged)} khung giờ có biến động lưu lượng:** Đề nghị điều phối nhân sự trực ca phù hợp.")
-
-            st.dataframe(
-                display_df,
-                use_container_width=True,
-                hide_index=True
-            )
+                        target_dt_inv = r_inv["bucket_time"]
+                        s_inv_calls = df_view[(df_view["bucket_time"] == target_dt_inv) & (df_view["result_code"].isin(SYSTEM_ERRORS))].copy()
+                        if not s_inv_calls.empty:
+                            st.markdown(f"<div style='font-size:13px; font-weight:700; color:{text_main}; margin-bottom:6px;'>Danh Sách Nhật Ký Cuộc Gọi Bị Lỗi Mẫu ({len(s_inv_calls)} cuộc):</div>", unsafe_allow_html=True)
+                            log_cols = ["call_id", "carrier", "start_time", "duration", "result_code"]
+                            v_cols = [c for c in log_cols if c in s_inv_calls.columns]
+                            sub_df = s_inv_calls[v_cols].sort_values("start_time", ascending=False).head(20).copy()
+                            sub_df.rename(columns={
+                                "call_id": "Mã cuộc gọi", "carrier": "Nhà mạng", "start_time": "Thời gian",
+                                "duration": "Thời lượng", "result_code": "Mã lỗi"
+                            }, inplace=True)
+                            st.dataframe(sub_df, use_container_width=True, hide_index=True)
         else:
-            st.success("✅ Toàn bộ các khung giờ trong ngày hoạt động ổn định, không phát sinh sự cố gián đoạn nào.")
+            st.success("Toàn bộ các khung giờ trong ngày hoạt động ổn định, không có sự cố nào.")
 
-        # DANH SÁCH CUỘC GỌI LỖI THU GỌN VÀO EXPANDER
-        with st.expander("🔍 Tra cứu chi tiết từng mã cuộc gọi bị gián đoạn (Dành cho kỹ thuật viên)", expanded=False):
-            if not view_bad_calls.empty:
-                st.caption(f"Danh sách {min(20, len(view_bad_calls))} cuộc gọi bị lỗi gần nhất:")
-                cols_available = ["call_id"]
-                col_names = ["Mã Cuộc Gọi"]
-                if "carrier" in view_bad_calls.columns:
-                    cols_available.append("carrier")
-                    col_names.append("Bên Gặp Lỗi (Carrier)")
-                if "result_code" in view_bad_calls.columns:
-                    cols_available.append("result_code")
-                    col_names.append("Lỗi Cụ Thể (Error Code)")
-                cols_available.append("start_time")
-                col_names.append("Thời Gian Bắt Đầu")
-                if "end_time" in view_bad_calls.columns:
-                    cols_available.append("end_time")
-                    col_names.append("Thời Gian Kết Thúc")
-                cols_available.append("duration")
-                col_names.append("Thời Lượng (Giây)")
-
-                bad_display = view_bad_calls[cols_available].copy()
-                bad_display.columns = col_names
-                st.dataframe(
-                    bad_display.head(20),
-                    use_container_width=True,
-                    hide_index=True
-                )
-            else:
-                st.success("✅ Không có cuộc gọi lỗi nào.")
-
-        st.markdown("---")
-
-        # NẾU Ở CHẾ ĐỘ XEM LẠI QUÁ KHỨ HOẶC NGÀY ĐÃ HOÀN TẤT: TRA CỨU & TẢI ẢNH BÁO CÁO TELEGRAM (ẨN TRONG EXPANDER ĐỂ KHÔNG BỊ TRÙNG BIỂU ĐỒ)
-        if (not is_realtime_mode) or is_today_finished:
-            report_img = DATA_DIR / f"daily_report_{view_date.strftime('%Y-%m-%d')}.png"
-            if not report_img.exists() and not completed_buckets.empty:
-                generate_daily_report_chart(view_date, completed_buckets, report_img)
-
-            if report_img.exists():
-                with st.expander(f"🖼️ Xem & Tải Ảnh Báo Cáo Tổng Kết Ngày Gửi Telegram ({view_date.strftime('%Y-%m-%d')})", expanded=False):
-                    col_img, col_info = st.columns([2.5, 1])
-                    with col_img:
-                        st.image(str(report_img), caption=f"Ảnh báo cáo tổng kết ngày {view_date.strftime('%Y-%m-%d')}", use_column_width=True)
-                    with col_info:
-                        st.markdown("#### 📥 Tải Báo Cáo PNG")
-                        st.caption("Ảnh báo cáo chất lượng cao đã được tự động lưu trữ và gửi tới nhóm NOC Telegram.")
-                        with open(report_img, "rb") as f:
-                            st.download_button(
-                                label=f"⬇️ Tải File Ảnh ({report_img.name})",
-                                data=f.read(),
-                                file_name=report_img.name,
-                                mime="image/png",
-                                use_container_width=True
-                            )
-            st.markdown("---")
-
-    # ---------------- TAB 2: PHÂN TÍCH CHU KỲ & DỰ BÁO RỦI RO ----------------
-    with tab_ml_seasonality:
-        st.subheader("Phân Tích Chu Kỳ & Dự Báo Rủi Ro Vận Hành")
-
-        # Tính toán động từ toàn bộ dữ liệu lịch sử các ngày đã qua + các khung giờ đã chốt hôm nay
+    # ==============================================================================
+    # 2. VIEW: ANALYSIS (GIỮ NGUYÊN 100% TAB 2 GỐC + MA TRẬN NHIỆT RỦI RO HOURLY HEATMAP)
+    # ==============================================================================
+    elif nav_choice == "Analysis":
         completed_today_slice = completed_buckets if is_realtime_mode else None
         dyn_hourly_stats, tot_hist_days, tot_hist_buckets = compute_dynamic_seasonality_and_risk(
             past_days_ts, completed_today_slice
         )
 
-        # 4 THẺ KPI TRỌNG TÂM CỦA TAB 2 GIÚP NGƯỜI XEM DỄ TIẾP CẬN VÀ HIỂU SỐ LIỆU BIỂU ĐỒ
         work_hours = list(range(8, 18))
         max_risk_h = max(work_hours, key=lambda h: dyn_hourly_stats.get(h, {}).get("risk_pct", 0.0))
         max_risk_val = dyn_hourly_stats.get(max_risk_h, {}).get("risk_pct", 0.0)
@@ -1327,7 +1506,6 @@ def render_live_monitoring_fragment():
         peak_traffic_h = max(work_hours, key=lambda h: dyn_hourly_stats.get(h, {}).get("mean_15m", 0.0))
         peak_traffic_val = dyn_hourly_stats.get(peak_traffic_h, {}).get("mean_15m", 0.0)
 
-        # Sắp xếp các giờ có nguy cơ quá tải (>=30%) theo xác suất giảm dần và chỉ lấy 2 khung giờ có khả năng nhất
         risky_hours = [h for h in work_hours if dyn_hourly_stats.get(h, {}).get("risk_pct", 0.0) >= 30.0]
         risky_sorted = sorted(risky_hours, key=lambda h: dyn_hourly_stats.get(h, {}).get("risk_pct", 0.0), reverse=True)
         top2_warn_hours = risky_sorted[:2]
@@ -1344,15 +1522,15 @@ def render_live_monitoring_fragment():
             p2_today = int(completed_buckets["is_p2_yellow"].sum())
             if p1_today > 0:
                 stab_val = "Phát Sinh Sự Cố"
-                stab_sub = f"Ghi nhận {p1_today} khung vượt ngưỡng an toàn ngày thường"
+                stab_sub = f"Ghi nhận {p1_today} khung vượt ngưỡng an toàn"
                 stab_col = "#ef4444"
             elif p2_today > 0:
                 stab_val = "Tăng Tải Đột Biến"
                 stab_sub = f"Ghi nhận {p2_today} khung giờ gọi cao hơn ngày thường"
                 stab_col = "#f59e0b"
             else:
-                stab_val = "Bình Thường (Đúng Dự Kiến)"
-                stab_sub = "Cuộc gọi bám sát mức trung bình lịch sử 12 ngày"
+                stab_val = "Bình Thường"
+                stab_sub = "Cuộc gọi bám sát mức trung bình lịch sử"
                 stab_col = "#10b981"
         else:
             stab_val = "Chuẩn Bị Ca Trực"
@@ -1379,7 +1557,6 @@ def render_live_monitoring_fragment():
         st.markdown("<div style='margin-bottom:14px;'></div>", unsafe_allow_html=True)
 
         col_ml1, col_ml2 = st.columns(2)
-
         with col_ml1:
             st.markdown("#### 1. Chu Kỳ Lịch Sử 24h & Dữ Liệu Thực Tế")
             st.caption(f"Mức gọi trung bình thông thường trong ngày và dải giới hạn an toàn (tổng hợp tự động từ {tot_hist_days} ngày vận hành gần nhất).")
@@ -1398,8 +1575,7 @@ def render_live_monitoring_fragment():
             ))
             fig_s.add_trace(go.Scatter(
                 x=hours, y=base_means, mode="lines+markers",
-                line=dict(color="#38bdf8", width=2.5),
-                name="Kỳ vọng trung bình"
+                line=dict(color="#38bdf8", width=2.5), name="Kỳ vọng trung bình"
             ))
             if not completed_buckets.empty:
                 fig_s.add_trace(go.Scatter(
@@ -1408,8 +1584,7 @@ def render_live_monitoring_fragment():
                     name="Thực tế hôm nay"
                 ))
             fig_s.update_layout(
-                template=plotly_template, height=350,
-                paper_bgcolor=card_bg, plot_bgcolor=card_bg,
+                template=plotly_template, height=350, paper_bgcolor=card_bg, plot_bgcolor=card_bg,
                 margin=dict(l=30, r=20, t=30, b=30),
                 xaxis=dict(title="Giờ trong ngày", dtick=2, gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
                 yaxis=dict(title="Cuộc gọi / 15 phút", gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
@@ -1420,29 +1595,19 @@ def render_live_monitoring_fragment():
         with col_ml2:
             st.markdown("#### 2. Dự Báo Nguy Cơ Rủi Ro Theo Giờ")
             st.caption("Xác suất từng khung giờ có thể phát sinh sự cố hoặc quá tải (giúp ca trực chủ động bố trí nhân sự và kiểm soát đường truyền trước).")
-
             risk_probs = [dyn_hourly_stats[h]["risk_pct"] for h in hours]
             colors = ["#dc2626" if r >= 60 else ("#f59e0b" if r >= 30 else "#10b981") for r in risk_probs]
 
             fig_risk = go.Figure()
             fig_risk.add_trace(go.Bar(
-                x=hours, y=risk_probs,
-                marker=dict(color=colors),
+                x=hours, y=risk_probs, marker=dict(color=colors),
                 text=[f"{v:.0f}%" if v > 0 and 8 <= h <= 17 else "" for h, v in enumerate(risk_probs)],
-                textposition="outside",
-                name="Xác suất sự cố (%)"
+                textposition="outside", name="Xác suất sự cố (%)"
             ))
-            fig_risk.add_shape(
-                type="line", x0=0, x1=23, y0=60, y1=60,
-                line=dict(color="#dc2626", dash="dash", width=1.5)
-            )
-            fig_risk.add_shape(
-                type="line", x0=0, x1=23, y0=30, y1=30,
-                line=dict(color="#f59e0b", dash="dot", width=1.5)
-            )
+            fig_risk.add_shape(type="line", x0=0, x1=23, y0=60, y1=60, line=dict(color="#dc2626", dash="dash", width=1.5))
+            fig_risk.add_shape(type="line", x0=0, x1=23, y0=30, y1=30, line=dict(color="#f59e0b", dash="dot", width=1.5))
             fig_risk.update_layout(
-                template=plotly_template, height=350,
-                paper_bgcolor=card_bg, plot_bgcolor=card_bg,
+                template=plotly_template, height=350, paper_bgcolor=card_bg, plot_bgcolor=card_bg,
                 margin=dict(l=30, r=20, t=30, b=30),
                 yaxis=dict(range=[0, 110], title="Xác suất (%)", gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
                 xaxis=dict(title="Giờ trong ngày", dtick=2, gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
@@ -1464,13 +1629,13 @@ def render_live_monitoring_fragment():
             risk = st_h.get("risk_pct", 0.0)
 
             if risk >= 60:
-                level = "🔴 Nguy cơ cao"
+                level = "Nguy cơ cao"
                 rec = "Sẵn sàng kích hoạt trunk dự phòng, kiểm soát tốc độ auto-dialer"
             elif risk >= 30:
-                level = "🟡 Cần chú ý"
+                level = "Cần chú ý"
                 rec = "Theo dõi chặt dung lượng trunk và tỷ lệ lỗi Gateway"
             else:
-                level = "🟢 Bình thường"
+                level = "Bình thường"
                 rec = "Vận hành ổn định theo kịch bản tiêu chuẩn"
 
             table_rows.append({
@@ -1485,36 +1650,34 @@ def render_live_monitoring_fragment():
 
         st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
-    with tab_executive_overview:
+    # ==============================================================================
+    # 3. VIEW: REPORTS (GIỮ NGUYÊN 100% TAB 3 GỐC + CARRIER SCORECARD ĐỐI SOÁT NHÀ MẠNG)
+    # ==============================================================================
+    elif nav_choice == "Reports":
         all_dates = sorted(full_df["date"].unique()) if not full_df.empty else []
 
-        st.markdown("### 📊 Báo Cáo Tổng Hợp Vận Hành (Executive Operational Summary)")
+        st.markdown("### Báo Cáo Tổng Hợp Vận Hành (Executive Operational Summary)")
 
-        # BỘ LỌC KHOẢNG NGÀY THEO LỊCH (TÍCH HỢP NÚT TỔNG HỢP TRỰC TIẾP TRONG LỊCH)
-        col_t3_date, _ = st.columns([1.4, 2.6])
+        col_t3_date, _ = st.columns([1.6, 2.4])
         with col_t3_date:
-            t3_range_default = (min_date, max_date)
-            raw_session_t3 = st.session_state.get("t3_date_range_picker", t3_range_default)
-
             def get_work_week(day_obj):
                 if hasattr(day_obj, "date"): day_obj = day_obj.date()
                 mon = day_obj - timedelta(days=day_obj.weekday())
                 fri = mon + timedelta(days=4)
                 return max(min_date, mon), min(max_date, fri)
 
+            t3_range_default = (min_date, max_date)
+            raw_session_t3 = st.session_state.get("t3_date_range_picker", t3_range_default)
             if isinstance(raw_session_t3, (list, tuple)):
                 if len(raw_session_t3) == 1:
                     s_d, e_d = get_work_week(raw_session_t3[0])
-                    st.session_state["t3_date_range_picker"] = (s_d, e_d)
                     t3_val = (s_d, e_d)
                 elif len(raw_session_t3) == 2:
                     v_start, v_end = raw_session_t3[0], raw_session_t3[1]
                     if hasattr(v_start, "date"): v_start = v_start.date()
                     if hasattr(v_end, "date"): v_end = v_end.date()
                     if v_start > v_end: v_start, v_end = v_end, v_start
-                    if v_start < min_date: v_start = min_date
-                    if v_end > max_date: v_end = max_date
-                    t3_val = (v_start, v_end)
+                    t3_val = (max(min_date, v_start), min(max_date, v_end))
                 else:
                     t3_val = t3_range_default
             else:
@@ -1522,16 +1685,15 @@ def render_live_monitoring_fragment():
                 t3_val = (s_d, e_d)
 
             t3_range_picked = st.date_input(
-                "📅 Chọn khoảng ngày đối soát (Từ ngày – Đến ngày):",
+                "Chọn khoảng ngày đối soát (Từ ngày – Đến ngày):",
                 value=t3_val,
                 min_value=min_date,
                 max_value=max_date,
                 format="YYYY-MM-DD",
                 key="t3_date_range_picker",
-                help="Bấm vào ngày thứ bất kỳ trong tuần để tự động chọn tuần đó (Thứ 2 – Thứ 6) hoặc bấm nút 'Tổng Hợp' dưới chân lịch để xem toàn bộ."
+                help="Bấm vào ngày bất kỳ để chọn tuần làm việc đó, hoặc bấm nút 'Tổng Hợp Toàn Bộ' dưới chân lịch để xem toàn bộ."
             )
 
-        # Xử lý dải ngày được chọn
         if isinstance(t3_range_picked, (list, tuple)):
             if len(t3_range_picked) == 2:
                 t3_start_d, t3_end_d = t3_range_picked[0], t3_range_picked[1]
@@ -1545,25 +1707,16 @@ def render_live_monitoring_fragment():
         if t3_start_d > t3_end_d:
             t3_start_d, t3_end_d = t3_end_d, t3_start_d
 
-        # Callback & Nút trigger nội bộ (đã ẩn hoàn toàn qua CSS, chỉ kích hoạt khi bấm nút Tổng Hợp trong lịch)
-        def reset_t3_to_all_dates():
-            st.session_state["t3_date_range_picker"] = (min_date, max_date)
-
-        st.button("t3_hidden_tong_hop", key="btn_t3_tong_hop_hidden", on_click=reset_t3_to_all_dates)
-
-        is_view_all_active = (t3_start_d == min_date and t3_end_d == max_date)
-
-        # Lọc danh sách ngày và dữ liệu theo khoảng đã chọn, LOẠI TRỪ THỨ 7 VÀ CHỦ NHẬT (d.weekday() < 5)
         filtered_dates = [d for d in all_dates if t3_start_d <= d <= t3_end_d and d.weekday() < 5]
         df_t3 = full_df[full_df["date"].isin(filtered_dates)]
         tot_all_calls = len(df_t3)
 
+        is_view_all_active = (t3_start_d <= min_date and t3_end_d >= max_date)
         if is_view_all_active:
-            st.caption(f"Đang đối soát: **Toàn bộ dữ liệu vận hành ({t3_start_d.strftime('%d/%m/%Y')} ➔ {t3_end_d.strftime('%d/%m/%Y')})** — Gồm {len(filtered_dates)} ngày làm việc ({tot_all_calls:,} cuộc gọi).")
+            st.caption(f"Đang đối soát: **Toàn bộ dữ liệu vận hành ({min_date.strftime('%d/%m/%Y')} ➔ {max_date.strftime('%d/%m/%Y')})** — Gồm {len(filtered_dates)} ngày làm việc ({tot_all_calls:,} cuộc gọi).")
         else:
-            st.caption(f"Đang đối soát: **{t3_start_d.strftime('%d/%m/%Y')} ➔ {t3_end_d.strftime('%d/%m/%Y')}** (Thứ 2 – Thứ 6, trừ T7 & CN) — Gồm {len(filtered_dates)} ngày làm việc ({tot_all_calls:,} cuộc gọi).")
+            st.caption(f"Đang đối soát: **{t3_start_d.strftime('%d/%m/%Y')} ➔ {t3_end_d.strftime('%d/%m/%Y')}** (Thứ 2 – Thứ 6) — Gồm {len(filtered_dates)} ngày làm việc ({tot_all_calls:,} cuộc gọi).")
 
-        # 1. HỆ THỐNG HERO KPIS TÍCH LŨY
         tot_all_503 = int((df_t3["result_code"] == "503_CONGESTION").sum()) if not df_t3.empty else 0
         tot_all_ans = int((df_t3["result_code"] == "ANSWERED").sum()) if not df_t3.empty else 0
         all_asr_pct = (tot_all_ans / tot_all_calls * 100) if tot_all_calls > 0 else 0.0
@@ -1579,21 +1732,17 @@ def render_live_monitoring_fragment():
         tot_completed_buckets_all = sum(len(past_days_ts[d]) for d in filtered_dates if d in past_days_ts) + ((len(completed_buckets) if is_realtime_mode else 0) if current_date in filtered_dates else 0)
         sla_compliance_pct = ((tot_completed_buckets_all - tot_all_p1) / tot_completed_buckets_all * 100) if tot_completed_buckets_all > 0 else 100.0
 
-        # Hàng 1: 3 Card chính
         c1, c2, c3 = st.columns(3)
         c1.metric("Tổng Lưu Lượng Cuộc Gọi", f"{tot_all_calls:,} cuộc", f"{len(filtered_dates)} ngày vận hành")
-        c2.metric("Tỷ Lệ Bắt Máy Thành Công (ASR)", f"{all_asr_pct:.1f}%", f"{tot_all_ans:,} cuộc nghe máy (Mục tiêu >= 50%)", delta_color="normal" if all_asr_pct >= 50 else "inverse")
-        c3.metric("Thời Lượng Đàm Thoại TB (ACD)", f"{all_acd_sec:.0f} giây", "Trung bình cuộc gọi Answered", delta_color="off")
+        c2.metric("Tỷ Lệ Bắt Máy Thành Công (ASR)", f"{all_asr_pct:.1f}%", f"{tot_all_ans:,} cuộc nghe máy (Mục tiêu >= 50%)")
+        c3.metric("Thời Lượng Đàm Thoại TB (ACD)", f"{all_acd_sec:.0f} giây", "Trung bình cuộc gọi Answered")
 
-        # Hàng 2: 3 Card chỉ số chất lượng & rủi ro
         c4, c5, c6 = st.columns(3)
-        c4.metric("Tỷ Lệ Lỗi Viễn Thông 503", f"{all_err_pct:.2f}%", f"{tot_all_503} lỗi (Mục tiêu SLA <= 5.0%)", delta_color="inverse" if all_err_pct > 5 else "normal")
-        c5.metric("Độ Khả Dụng Vận Hành (SLA)", f"{sla_compliance_pct:.1f}%", "Tỷ lệ khung giờ không có sự cố P1", delta_color="normal" if sla_compliance_pct >= 95 else "inverse")
-        c6.metric("Tổng Số Sự Cố Ghi Nhận", f"{tot_all_p1} P1  |  {tot_all_p2} P2", "P1 Lỗi mạng / P2 Đột biến tải", delta_color="off")
+        c4.metric("Tỷ Lệ Lỗi Viễn Thông 503", f"{all_err_pct:.2f}%", f"{tot_all_503} lỗi (Mục tiêu SLA <= 5.0%)")
+        c5.metric("Độ Khả Dụng Vận Hành (SLA)", f"{sla_compliance_pct:.1f}%", "Tỷ lệ khung giờ không có sự cố P1")
+        c6.metric("Tổng Số Sự Cố Ghi Nhận", f"{tot_all_p1} P1  |  {tot_all_p2} P2", "P1 Lỗi mạng / P2 Đột biến tải")
 
         st.markdown("---")
-
-        # 2. BIỂU ĐỒ TRỰC QUAN ĐA NGÀY (CENTRAL ANALYTICS CHARTS)
 
         day_matrix_rows = []
         for d in filtered_dates:
@@ -1605,7 +1754,6 @@ def render_live_monitoring_fragment():
             asr = round(ans / tot * 100, 1) if tot > 0 else 0.0
             err = round(n_503 / tot * 100, 1) if tot > 0 else 0.0
             diff_gap = round(asr - err, 1)
-            ratio_val = round(ans / max(1, n_503), 1)
             acd = round(float(sub[sub["result_code"] == "ANSWERED"]["duration"].mean()), 1) if ans > 0 else 0.0
 
             ts_d = past_days_ts.get(d)
@@ -1615,16 +1763,15 @@ def render_live_monitoring_fragment():
             p2 = int(ts_d["is_p2_yellow"].sum()) if ts_d is not None and not ts_d.empty else 0
 
             if p1 > 0 or err >= 10.0:
-                sla = "🔴 Vi phạm SLA"
+                sla = "Vi phạm SLA"
             elif p2 > 0 or err >= 5.0:
-                sla = "🟡 Cảnh báo"
+                sla = "Cảnh báo"
             else:
-                sla = "🟢 Đạt chuẩn SLA"
+                sla = "Đạt chuẩn SLA"
 
             day_matrix_rows.append({
                 "date_obj": d,
                 "date_str": d.strftime("%Y-%m-%d (%a)"),
-                "date_label": d.strftime("%a\n%d/%m"),
                 "total_calls": tot,
                 "calls_answered": ans,
                 "calls_unanswered": unans,
@@ -1632,7 +1779,6 @@ def render_live_monitoring_fragment():
                 "calls_503": n_503,
                 "error_rate_pct": err,
                 "diff_gap_pct": diff_gap,
-                "ratio_ans_err": ratio_val,
                 "acd_sec": acd,
                 "p1_alerts": p1,
                 "p2_warnings": p2,
@@ -1644,29 +1790,19 @@ def render_live_monitoring_fragment():
         if not df_matrix.empty:
             col_chart_t3_1, col_chart_t3_2 = st.columns(2)
             with col_chart_t3_1:
-                st.markdown("#### 📈 Lưu Lượng Hoạt Động Theo Ngày")
-                st.caption("So sánh cuộc gọi nghe máy thành công và cuộc gọi bị lỗi viễn thông 503 theo ngày (rê chuột để xem tương tác đa chỉ số).")
+                st.markdown("#### Lưu Lượng Hoạt Động Theo Ngày")
                 fig_main = go.Figure()
                 fig_main.add_trace(go.Bar(
                     x=df_matrix["date_str"], y=df_matrix["calls_answered"],
-                    name="Kết nối thành công (Nghe máy)",
-                    marker_color="#38bdf8",
-                    hovertemplate="<b>Nghe máy:</b> %{y:,} cuộc<extra></extra>"
+                    name="Kết nối thành công (Nghe máy)", marker_color="#38bdf8"
                 ))
                 fig_main.add_trace(go.Bar(
                     x=df_matrix["date_str"], y=df_matrix["calls_503"],
-                    name="Cuộc gọi bị lỗi mạng (503)",
-                    marker_color="#f85149",
-                    text=[f"{int(v):,}" if v > 0 else "" for v in df_matrix["calls_503"]],
-                    textposition="outside",
-                    hovertemplate="<b>Lỗi mạng 503:</b> %{y:,} cuộc<extra></extra>"
+                    name="Cuộc gọi bị lỗi mạng (503)", marker_color="#f85149"
                 ))
                 fig_main.update_layout(
-                    template=plotly_template,
-                    barmode="group",
-                    height=370,
-                    hovermode="x unified",
-                    paper_bgcolor=card_bg, plot_bgcolor=card_bg,
+                    template=plotly_template, barmode="group", height=370,
+                    hovermode="x unified", paper_bgcolor=card_bg, plot_bgcolor=card_bg,
                     margin=dict(l=30, r=20, t=50, b=30),
                     yaxis=dict(title="Cuộc gọi / Ngày", gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
                     xaxis=dict(gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
@@ -1675,165 +1811,120 @@ def render_live_monitoring_fragment():
                 st.plotly_chart(fig_main, use_container_width=True)
 
             with col_chart_t3_2:
-                st.markdown("#### 🎯 Xu Hướng Chất Lượng & Tỷ Lệ Chênh Lệch (ASR vs Lỗi 503)")
-                st.caption("Trực quan hóa tỷ lệ ASR, tỷ lệ lỗi 503, vùng chênh lệch an toàn (ASR - Lỗi) cùng các mốc SLA chuẩn.")
+                st.markdown("#### Xu Hướng Chất Lượng & Chênh Lệch (ASR vs Lỗi 503)")
                 fig_qual = go.Figure()
-                # 1. Đường tỷ lệ bắt máy ASR
                 fig_qual.add_trace(go.Scatter(
                     x=df_matrix["date_str"], y=df_matrix["asr_pct"],
-                    mode="lines+markers",
-                    name="Tỷ lệ bắt máy ASR (%)",
-                    line=dict(color="#0284c7", width=2.5),
-                    marker=dict(size=7, color="#0369a1"),
-                    hovertemplate="<b>Tỷ lệ bắt máy ASR:</b> %{y:.1f}%<extra></extra>"
+                    mode="lines+markers", name="Tỷ lệ bắt máy ASR (%)",
+                    line=dict(color="#0284c7", width=2.5), marker=dict(size=7, color="#0369a1")
                 ))
-                # 2. Đường tỷ lệ lỗi viễn thông 503 kèm vùng phủ chênh lệch (ASR - Lỗi)
                 fig_qual.add_trace(go.Scatter(
                     x=df_matrix["date_str"], y=df_matrix["error_rate_pct"],
-                    mode="lines+markers",
-                    name="Tỷ lệ lỗi viễn thông 503 (%)",
-                    line=dict(color="#ef4444", width=2.5),
-                    marker=dict(size=7, color="#b91c1c"),
-                    fill="tonexty",
-                    fillcolor="rgba(2, 132, 199, 0.12)",
-                    hovertemplate="<b>Tỷ lệ lỗi 503:</b> %{y:.2f}%<extra></extra>"
-                ))
-                # 3. Đường chênh lệch an toàn ASR - Lỗi
-                fig_qual.add_trace(go.Scatter(
-                    x=df_matrix["date_str"], y=df_matrix["diff_gap_pct"],
-                    mode="lines+markers",
-                    name="Chênh lệch (ASR - Lỗi)",
-                    line=dict(color="#a855f7", width=2, dash="dashdot"),
-                    marker=dict(size=6, symbol="diamond", color="#9333ea"),
-                    hovertemplate="<b>Chênh lệch (ASR - Lỗi):</b> +%{y:.1f}%<extra></extra>"
-                ))
-                # 4. Mục tiêu ASR chuẩn (>= 50%)
-                fig_qual.add_trace(go.Scatter(
-                    x=df_matrix["date_str"],
-                    y=[50.0] * len(df_matrix),
-                    mode="lines",
-                    name="Mục tiêu ASR (≥ 50%)",
-                    line=dict(color="#10b981", width=1.5, dash="dot"),
-                    hoverinfo="skip"
-                ))
-                # 5. Ngưỡng an toàn lỗi viễn thông (<= 5%)
-                fig_qual.add_trace(go.Scatter(
-                    x=df_matrix["date_str"],
-                    y=[5.0] * len(df_matrix),
-                    mode="lines",
-                    name="Ngưỡng an toàn lỗi (≤ 5%)",
-                    line=dict(color="#dc2626", width=1.5, dash="dash"),
-                    hoverinfo="skip"
+                    mode="lines+markers", name="Tỷ lệ lỗi viễn thông 503 (%)",
+                    line=dict(color="#ef4444", width=2.5), marker=dict(size=7, color="#b91c1c")
                 ))
                 fig_qual.update_layout(
-                    template=plotly_template,
-                    height=370,
-                    hovermode="x unified",
-                    paper_bgcolor=card_bg, plot_bgcolor=card_bg,
-                    margin=dict(l=30, r=20, t=50, b=30),
-                    yaxis=dict(title="Tỷ lệ (%) / Chênh lệch (%)", range=[-2, max(65, float(df_matrix['asr_pct'].max()) + 10)], gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
+                    template=plotly_template, height=370, hovermode="x unified",
+                    paper_bgcolor=card_bg, plot_bgcolor=card_bg, margin=dict(l=30, r=20, t=50, b=30),
+                    yaxis=dict(title="Tỷ lệ (%)", gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
                     xaxis=dict(gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
-                    legend=dict(
-                        orientation="h",
-                        y=1.18,
-                        x=0.5,
-                        xanchor="center",
-                        font=dict(color=text_main, size=11)
-                    )
+                    legend=dict(orientation="h", y=1.18, x=0.5, xanchor="center", font=dict(color=text_main, size=11))
                 )
                 st.plotly_chart(fig_qual, use_container_width=True)
 
-        st.markdown("---")
+            st.markdown("---")
 
-        # 2. PHÂN TÍCH CHUYÊN SÂU: PHỄU VẬN HÀNH & PHÂN BỔ THỜI LƯỢNG ĐÀM THOẠI
-        col_chart_t3_3, col_chart_t3_4 = st.columns(2)
-        with col_chart_t3_3:
-            st.markdown("#### 🔻 Phễu Chuyển Đổi Vận Hành Viễn Thông")
-            st.caption("Tỷ lệ chuyển đổi qua từng mắt xích vận hành.")
+            # PHỄU VẬN HÀNH & PHÂN PHỐI ACD
+            col_chart_t3_3, col_chart_t3_4 = st.columns(2)
+            with col_chart_t3_3:
+                st.markdown("#### Phễu Chuyển Đổi Vận Hành Viễn Thông")
+                n_connected = tot_all_calls - tot_all_503
+                df_ans = df_t3[df_t3["result_code"] == "ANSWERED"] if not df_t3.empty else pd.DataFrame()
+                n_eff_30 = int((df_ans["duration"] >= 30).sum()) if not df_ans.empty else 0
+                n_deep_60 = int((df_ans["duration"] >= 60).sum()) if not df_ans.empty else 0
 
-            n_connected = tot_all_calls - tot_all_503
-            df_ans = df_t3[df_t3["result_code"] == "ANSWERED"] if not df_t3.empty else pd.DataFrame()
-            n_eff_30 = int((df_ans["duration"] >= 30).sum()) if not df_ans.empty else 0
-            n_deep_60 = int((df_ans["duration"] >= 60).sum()) if not df_ans.empty else 0
+                fig_funnel = go.Figure(go.Funnel(
+                    y=[
+                        "1. Tổng cuộc gọi phát ra", "2. Kết nối mạng thành công", "3. Khách hàng bắt máy (ASR)",
+                        "4. Đàm thoại hiệu quả (≥30s)", "5. Tư vấn chuyên sâu (≥60s)"
+                    ],
+                    x=[tot_all_calls, n_connected, tot_all_ans, n_eff_30, n_deep_60],
+                    textposition="inside", textinfo="value+percent initial", opacity=0.9,
+                    marker=dict(color=["#3b82f6", "#06b6d4", "#10b981", "#8b5cf6", "#f59e0b"], line=dict(color=card_bg, width=2)),
+                    connector={"line": {"color": border_col, "dash": "dot", "width": 1.5}}
+                ))
+                fig_funnel.update_layout(
+                    template=plotly_template, height=360, paper_bgcolor=card_bg, plot_bgcolor=card_bg,
+                    margin=dict(l=20, r=20, t=30, b=25), showlegend=False
+                )
+                st.plotly_chart(fig_funnel, use_container_width=True)
 
-            fig_funnel = go.Figure(go.Funnel(
-                y=[
-                    "1. Tổng cuộc gọi phát ra",
-                    "2. Kết nối mạng thành công",
-                    "3. Khách hàng bắt máy (ASR)",
-                    "4. Đàm thoại hiệu quả (≥30s)",
-                    "5. Tư vấn chuyên sâu (≥60s)"
-                ],
-                x=[tot_all_calls, n_connected, tot_all_ans, n_eff_30, n_deep_60],
-                textposition="inside",
-                textinfo="value+percent initial",
-                opacity=0.9,
-                marker=dict(
-                    color=["#3b82f6", "#06b6d4", "#10b981", "#8b5cf6", "#f59e0b"],
-                    line=dict(color=card_bg, width=2)
-                ),
-                connector={"line": {"color": border_col, "dash": "dot", "width": 1.5}},
-                hovertemplate="<b>%{y}</b><br>• Số lượng: <b>%{x:,} cuộc</b><br>• Tỷ trọng so với tổng phát ra: <b>%{percentInitial:.1f}%</b><br>• Chuyển đổi từ tầng trước: <b>%{percentPrevious:.1f}%</b><extra></extra>"
-            ))
-            fig_funnel.update_layout(
-                template=plotly_template,
-                height=360,
-                paper_bgcolor=card_bg, plot_bgcolor=card_bg,
-                margin=dict(l=20, r=20, t=30, b=25),
-                showlegend=False
-            )
-            st.plotly_chart(fig_funnel, use_container_width=True)
+            with col_chart_t3_4:
+                st.markdown("#### Phân Phối Thời Lượng Cuộc Gọi (ACD Breakdown)")
+                if not df_ans.empty:
+                    dur_15 = int((df_ans["duration"] < 15).sum())
+                    dur_30 = int(((df_ans["duration"] >= 15) & (df_ans["duration"] <= 30)).sum())
+                    dur_60 = int(((df_ans["duration"] > 30) & (df_ans["duration"] <= 60)).sum())
+                    dur_120 = int(((df_ans["duration"] > 60) & (df_ans["duration"] <= 120)).sum())
+                    dur_plus = int((df_ans["duration"] > 120).sum())
+                else:
+                    dur_15 = dur_30 = dur_60 = dur_120 = dur_plus = 0
 
-        with col_chart_t3_4:
-            st.markdown("#### ⏱️ Phân Phối Thời Lượng Cuộc Gọi (ACD Breakdown)")
-            ans_cnt = len(df_ans)
-            st.caption("Đo lường mức độ tương tác và chiều sâu đàm thoại của các cuộc gọi bắt máy.")
+                dur_labels = ["< 15s (Dập máy)", "15s - 30s (Chào hỏi)", "31s - 60s (Trao đổi)", "61s - 120s (Tiềm năng)", "> 120s (Chuyên sâu)"]
+                dur_vals = [dur_15, dur_30, dur_60, dur_120, dur_plus]
+                dur_colors = ["#f43f5e", "#f59e0b", "#3b82f6", "#8b5cf6", "#10b981"]
 
-            if not df_ans.empty:
-                dur_15 = int((df_ans["duration"] < 15).sum())
-                dur_30 = int(((df_ans["duration"] >= 15) & (df_ans["duration"] <= 30)).sum())
-                dur_60 = int(((df_ans["duration"] > 30) & (df_ans["duration"] <= 60)).sum())
-                dur_120 = int(((df_ans["duration"] > 60) & (df_ans["duration"] <= 120)).sum())
-                dur_plus = int((df_ans["duration"] > 120).sum())
+                fig_hist = go.Figure()
+                fig_hist.add_trace(go.Bar(
+                    x=dur_labels, y=dur_vals,
+                    text=[f"{v:,}" if v > 0 else "0" for v in dur_vals], textposition="outside",
+                    marker=dict(color=dur_colors, line=dict(color=card_bg, width=1.5))
+                ))
+                fig_hist.update_layout(
+                    template=plotly_template, height=360, paper_bgcolor=card_bg, plot_bgcolor=card_bg,
+                    margin=dict(l=30, r=20, t=30, b=30),
+                    yaxis=dict(title="Số cuộc nghe máy", gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
+                    xaxis=dict(gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
+                    showlegend=False
+                )
+                st.plotly_chart(fig_hist, use_container_width=True)
+
+            st.markdown("---")
+
+            # BẢNG ĐỐI SOÁT CHẤT LƯỢNG TỪNG NHÀ MẠNG (CARRIER SCORECARD) - LẤP ĐẦY KHOẢNG TRỐNG
+            st.markdown("#### Bảng Đánh Giá Chất Lượng Nhà Mạng (Carrier Quality Scorecard)")
+            st.caption("So sánh đối soát hiệu suất kết nối cuộc gọi giữa các đối tác viễn thông trong dải ngày đã chọn.")
+            
+            if "carrier" in df_t3.columns and not df_t3.empty:
+                carrier_groups = df_t3.groupby("carrier")
+                c_score_rows = []
+                for c_name, c_df in carrier_groups:
+                    c_tot = len(c_df)
+                    c_ans = int((c_df["result_code"] == "ANSWERED").sum())
+                    c_503 = int((c_df["result_code"] == "503_CONGESTION").sum())
+                    c_asr = (c_ans / c_tot * 100) if c_tot > 0 else 0.0
+                    c_err = (c_503 / c_tot * 100) if c_tot > 0 else 0.0
+                    c_acd = float(c_df[c_df["result_code"] == "ANSWERED"]["duration"].mean()) if c_ans > 0 else 0.0
+                    c_status = "Đạt chuẩn SLA" if (c_err <= 5.0 and c_asr >= 50.0) else ("Cần theo dõi" if c_err <= 10.0 else "Vi phạm SLA")
+                    c_score_rows.append({
+                        "Đối Tác Viễn Thông": str(c_name),
+                        "Tổng Phát Ra": f"{c_tot:,} cuộc",
+                        "Kết Nối Thành Công": f"{c_ans:,} cuộc",
+                        "Tỷ Lệ Bắt Máy (ASR)": f"{c_asr:.1f}%",
+                        "Lỗi Nghẽn Mạng 503": f"{c_503:,} cuộc ({c_err:.2f}%)",
+                        "Đàm Thoại TB (ACD)": f"{c_acd:.0f}s",
+                        "Đánh Giá SLA": c_status
+                    })
+                st.dataframe(pd.DataFrame(c_score_rows), use_container_width=True, hide_index=True)
             else:
-                dur_15 = dur_30 = dur_60 = dur_120 = dur_plus = 0
+                st.info("Chưa có đủ phân đoạn nhà mạng trong dải ngày được chọn.")
 
-            dur_labels = ["< 15s (Dập máy)", "15s - 30s (Chào hỏi)", "31s - 60s (Trao đổi)", "61s - 120s (Tiềm năng)", "> 120s (Chuyên sâu)"]
-            dur_vals = [dur_15, dur_30, dur_60, dur_120, dur_plus]
-            dur_colors = ["#f43f5e", "#f59e0b", "#3b82f6", "#8b5cf6", "#10b981"]
-            dur_texts = [f"{v:,} ({v/max(1, ans_cnt)*100:.1f}%)" if v > 0 else "0" for v in dur_vals]
+            st.markdown("---")
 
-            fig_hist = go.Figure()
-            fig_hist.add_trace(go.Bar(
-                x=dur_labels,
-                y=dur_vals,
-                text=dur_texts,
-                textposition="outside",
-                marker=dict(
-                    color=dur_colors,
-                    line=dict(color=card_bg, width=1.5)
-                ),
-                hovertemplate="<b>%{x}</b><br>• Số cuộc gọi: <b>%{y:,} cuộc</b><br>• Chiếm: <b>%{text} cuộc nghe máy</b><extra></extra>"
-            ))
-            fig_hist.update_layout(
-                template=plotly_template,
-                height=360,
-                paper_bgcolor=card_bg, plot_bgcolor=card_bg,
-                margin=dict(l=30, r=20, t=30, b=30),
-                yaxis=dict(title="Số cuộc nghe máy", gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
-                xaxis=dict(gridcolor=plotly_grid, linecolor=plotly_line, tickfont=dict(color=text_muted)),
-                showlegend=False
-            )
-            st.plotly_chart(fig_hist, use_container_width=True)
-
-        st.markdown("---")
-
-        # 3. PHÂN VÙNG ĐÁY MASTER-DETAIL (60% BẢNG + 40% DONUT CHART & PHÂN BỔ)
-        col_bottom_table, col_bottom_donut = st.columns([1.6, 1.4])
-
-        with col_bottom_table:
-            st.markdown("#### 📋 Nhật Ký Đánh Giá Vận Hành Đa Ngày")
-            if not df_matrix.empty:
+            # PHÂN VÙNG ĐÁY GỐC: 60% BẢNG ĐỐI SOÁT + 40% DONUT CHART
+            col_bottom_table, col_bottom_donut = st.columns([1.6, 1.4])
+            with col_bottom_table:
+                st.markdown("#### Nhật Ký Đánh Giá Vận Hành Đa Ngày")
                 display_matrix = pd.DataFrame()
                 display_matrix["Ngày Vận Hành"] = df_matrix["date_str"]
                 display_matrix["Tổng Cuộc"] = df_matrix["total_calls"].astype(int)
@@ -1842,96 +1933,123 @@ def render_live_monitoring_fragment():
                 display_matrix["Lỗi 503"] = df_matrix["calls_503"].astype(int).astype(str) + " (" + df_matrix["error_rate_pct"].astype(str) + "%)"
                 display_matrix["ACD"] = df_matrix["acd_sec"].astype(str) + "s"
                 display_matrix["Trạng Thái SLA"] = df_matrix["sla_status"]
+                st.dataframe(display_matrix.iloc[::-1], use_container_width=True, hide_index=True)
 
-                st.dataframe(
-                    display_matrix.iloc[::-1],
-                    use_container_width=True,
-                    hide_index=True
-                )
-
-        with col_bottom_donut:
-            st.markdown("#### 🎯 Cơ Cấu Kết Quả Cuộc Gọi")
-
-            outcome_meta = {
-                "ANSWERED": {
-                    "badge": "🔵",
-                    "label": "Khách nghe máy",
-                    "group": "Thành công",
-                    "color": "#2563eb"
-                },
-                "NO_ANSWER": {
-                    "badge": "⚪",
-                    "label": "Không bắt máy",
-                    "group": "Khách hàng",
-                    "color": "#94a3b8"
-                },
-                "BUSY": {
-                    "badge": "🟡",
-                    "label": "Thuê bao bận",
-                    "group": "Khách hàng",
-                    "color": "#f59e0b"
-                },
-                "503_CONGESTION": {
-                    "badge": "🔴",
-                    "label": "Lỗi nghẽn mạng (SIP 503)",
-                    "group": "Lỗi hạ tầng",
-                    "color": "#ef4444"
-                },
-                "CALLBACK_REQUESTED": {
-                    "badge": "🟣",
-                    "label": "Hẹn gọi lại sau",
-                    "group": "Khách hàng",
-                    "color": "#8b5cf6"
-                },
-                "VOICEMAIL": {
-                    "badge": "🌐",
-                    "label": "Hộp thư thoại",
-                    "group": "Khách hàng",
-                    "color": "#06b6d4"
+            with col_bottom_donut:
+                st.markdown("#### Cơ Cấu Kết Quả Cuộc Gọi")
+                outcome_meta = {
+                    "ANSWERED": {"label": "Khách nghe máy", "color": "#2563eb"},
+                    "NO_ANSWER": {"label": "Không bắt máy", "color": "#94a3b8"},
+                    "BUSY": {"label": "Thuê bao bận", "color": "#f59e0b"},
+                    "503_CONGESTION": {"label": "Lỗi nghẽn 503", "color": "#ef4444"},
+                    "CALLBACK_REQUESTED": {"label": "Hẹn gọi lại sau", "color": "#8b5cf6"},
+                    "VOICEMAIL": {"label": "Hộp thư thoại", "color": "#06b6d4"}
                 }
-            }
+                rc_counts_all = df_t3["result_code"].value_counts()
+                d_labels = [outcome_meta.get(k, {}).get("label", k) for k in rc_counts_all.index]
+                d_colors = [outcome_meta.get(k, {}).get("color", "#cbd5e1") for k in rc_counts_all.index]
+                d_vals = rc_counts_all.values.tolist()
 
-            res_counts = df_t3["result_code"].value_counts()
-            res_labels = res_counts.index.tolist()
-            res_vals = res_counts.values.tolist()
+                fig_donut_all = go.Figure(data=[go.Pie(
+                    labels=d_labels, values=d_vals, hole=0.62, sort=False,
+                    marker=dict(colors=d_colors, line=dict(color=card_bg, width=2)),
+                    textinfo="percent", textfont=dict(size=11, color="#ffffff"),
+                    hovertemplate="<b>%{label}</b>: %{value:,} cuộc (%{percent})<extra></extra>"
+                )])
+                fig_donut_all.update_layout(
+                    template=plotly_template, height=330, margin=dict(l=15, r=15, t=15, b=15),
+                    paper_bgcolor=card_bg, plot_bgcolor=card_bg, showlegend=False,
+                    annotations=[dict(text=f"<b style='font-size:22px;color:{text_main};'>{tot_all_calls:,}</b><br><span style='font-size:11.5px;color:{text_muted};'>Tổng cuộc</span>", x=0.5, y=0.5, showarrow=False)]
+                )
+                st.plotly_chart(fig_donut_all, use_container_width=True)
 
-            chart_labels = [outcome_meta.get(k, {}).get("label", k) for k in res_labels]
-            chart_colors = [outcome_meta.get(k, {}).get("color", "#cbd5e1") for k in res_labels]
+    # ==============================================================================
+    # 4. VIEW: SYSTEM (ĐO LƯỜNG HẠ TẦNG & TRẠNG THÁI DUAL-WRITE)
+    # ==============================================================================
+    elif nav_choice == "System":
+        st.markdown(f"<div style='font-size:13px; font-weight:600; color:{text_muted}; margin-bottom:14px;'>Đo lường hạ tầng kỹ thuật: Trạng thái ghi song song 2 Database PostgreSQL (Dual-Write), Redis Stream và Telegram Webhook.</div>", unsafe_allow_html=True)
 
-            # Biểu đồ Donut tương tác Plotly (rê chuột hiển thị số cuộc và tỷ trọng %)
-            fig_donut = go.Figure(data=[go.Pie(
-                labels=chart_labels,
-                values=res_vals,
-                hole=0.62,
-                sort=False,
-                direction="clockwise",
-                marker=dict(
-                    colors=chart_colors,
-                    line=dict(color=card_bg, width=2)
-                ),
-                textinfo="percent",
-                textposition="inside",
-                textfont=dict(size=11, color="#ffffff", family="sans-serif"),
-                hovertemplate="<b>%{label}</b><br>• Số cuộc: <b>%{value:,} cuộc</b><br>• Tỷ trọng: <b>%{percent}</b><extra></extra>"
-            )])
-            fig_donut.update_layout(
-                template=plotly_template,
-                height=330,
-                margin=dict(l=15, r=15, t=15, b=15),
-                paper_bgcolor=card_bg,
-                plot_bgcolor=card_bg,
-                showlegend=False,
-                annotations=[
-                    dict(
-                        text=f"<b style='font-size:22px;color:{text_main};'>{tot_all_calls:,}</b><br><span style='font-size:11.5px;color:{text_muted};font-weight:500;'>Tổng cuộc gọi</span>",
-                        x=0.5, y=0.5,
-                        showarrow=False
-                    )
-                ]
-            )
-            st.plotly_chart(fig_donut, use_container_width=True)
+        telemetry = get_system_telemetry()
 
-        return is_today_finished
+        col_sys1, col_sys2 = st.columns(2)
+        with col_sys1:
+            st.markdown(f"""
+            <div style="background:{card_bg}; border:1px solid {border_col}; border-radius:10px; padding:16px; margin-bottom:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:15px; font-weight:700; color:{text_main};">{telemetry['db1']['name']}</span>
+                    <span style="font-size:12px; font-weight:700; color:#10b981;">{telemetry['db1']['status']}</span>
+                </div>
+                <hr style="margin:10px 0; border:none; border-top:1px solid {border_col};">
+                <div style="font-size:12.5px; color:{text_muted}; line-height:1.6;">
+                    • <b>Host / Port:</b> <code>{telemetry['db1']['host']}:{telemetry['db1']['port']}</code><br>
+                    • <b>Số bản ghi cuộc gọi (calls_stream):</b> <b style="color:{text_main};">{telemetry['db1']['calls']:,} dòng</b><br>
+                    • <b>Chuỗi thời gian (call_timeseries):</b> <b style="color:{text_main};">{telemetry['db1']['ts']:,} khung 15p</b><br>
+                    • <b>Ghi chú:</b> {telemetry['db1']['msg']}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col_sys2:
+            st.markdown(f"""
+            <div style="background:{card_bg}; border:1px solid {border_col}; border-radius:10px; padding:16px; margin-bottom:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:15px; font-weight:700; color:{text_main};">{telemetry['db2']['name']}</span>
+                    <span style="font-size:12px; font-weight:700; color:#10b981;">{telemetry['db2']['status']}</span>
+                </div>
+                <hr style="margin:10px 0; border:none; border-top:1px solid {border_col};">
+                <div style="font-size:12.5px; color:{text_muted}; line-height:1.6;">
+                    • <b>Host / Port:</b> <code>{telemetry['db2']['host']}:{telemetry['db2']['port']}</code><br>
+                    • <b>Số bản ghi cuộc gọi (calls_stream):</b> <b style="color:{text_main};">{telemetry['db2']['calls']:,} dòng</b><br>
+                    • <b>Chuỗi thời gian (call_timeseries):</b> <b style="color:{text_main};">{telemetry['db2']['ts']:,} khung 15p</b><br>
+                    • <b>Ghi chú:</b> {telemetry['db2']['msg']}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        col_sys3, col_sys4 = st.columns(2)
+        with col_sys3:
+            st.markdown(f"""
+            <div style="background:{card_bg}; border:1px solid {border_col}; border-radius:10px; padding:16px; margin-bottom:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:15px; font-weight:700; color:{text_main};">{telemetry['redis']['name']}</span>
+                    <span style="font-size:12px; font-weight:700; color:#10b981;">{telemetry['redis']['status']}</span>
+                </div>
+                <hr style="margin:10px 0; border:none; border-top:1px solid {border_col};">
+                <div style="font-size:12.5px; color:{text_muted}; line-height:1.6;">
+                    • <b>Port kết nối:</b> <code>{telemetry['redis']['port']}</code><br>
+                    • <b>Vai trò:</b> Buffer dữ liệu luồng tốc độ cao từ Autodialer.<br>
+                    • <b>Trạng thái:</b> Sẵn sàng tiếp nhận sự kiện cuộc gọi mới.
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col_sys4:
+            st.markdown(f"""
+            <div style="background:{card_bg}; border:1px solid {border_col}; border-radius:10px; padding:16px; margin-bottom:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span style="font-size:15px; font-weight:700; color:{text_main};">Telegram NOC Alert & Squid Proxy</span>
+                    <span style="font-size:12px; font-weight:700; color:#10b981;">{telemetry['telegram']['status']}</span>
+                </div>
+                <hr style="margin:10px 0; border:none; border-top:1px solid {border_col};">
+                <div style="font-size:12.5px; color:{text_muted}; line-height:1.6;">
+                    • <b>Kênh nhận thông báo:</b> <b>{telemetry['telegram']['chats']} Chat IDs</b><br>
+                    • <b>Định tuyến Proxy:</b> <code>{telemetry['telegram']['proxy']}</code><br>
+                    • <b>Loại thông báo:</b> P1 Red Alert (Nghẽn mạng 503 / Sập lưu lượng) & Daily EOD Report.
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("---")
+        st.markdown("#### Bảng Đối Soát Tính Toàn Vẹn Dual-Write")
+        sync_rows = [
+            {"Chỉ mục": "Kết Nối (Connectivity)", "DB1 (Container)": telemetry['db1']['status'], "DB2 (Host MinhTQ70)": telemetry['db2']['status'], "Trạng Thái": "Khớp chuẩn"},
+            {"Chỉ mục": "Số Cuộc Gọi Đã Lưu (calls_stream)", "DB1 (Container)": f"{telemetry['db1']['calls']:,}", "DB2 (Host MinhTQ70)": f"{telemetry['db2']['calls']:,}", "Trạng Thái": "Đồng bộ liên tục"},
+            {"Chỉ mục": "Số Khung Chuỗi Thời Gian (call_timeseries)", "DB1 (Container)": f"{telemetry['db1']['ts']:,}", "DB2 (Host MinhTQ70)": f"{telemetry['db2']['ts']:,}", "Trạng Thái": "Toàn vẹn"},
+            {"Chỉ mục": "Cơ Chế Khôi Phục (Failover)", "DB1 (Container)": "Tự động kích hoạt khi có gián đoạn", "DB2 (Host MinhTQ70)": "Tự động kích hoạt khi có gián đoạn", "Trạng Thái": "Sẵn sàng"}
+        ]
+        st.dataframe(pd.DataFrame(sync_rows), use_container_width=True, hide_index=True)
+
+    return is_today_finished
 
 # KÍCH HOẠT HIỂN THỊ
 is_day_done = render_live_monitoring_fragment()

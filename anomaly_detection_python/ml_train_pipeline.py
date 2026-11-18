@@ -149,15 +149,15 @@ def extract_features_and_ground_truth(df: pd.DataFrame):
     df["rolling_std_4"] = df["calls_total"].rolling(window=4, min_periods=1).std().fillna(0.0)
 
     # 4. Gán nhãn Ground Truth (y_true ∈ {0, 1})
-    # Tiêu chí sự cố thực tế:
-    # - Sự cố P1 PBX Sập: calls_total = 0 trong giờ hành chính (8h-17h, ngày thường)
-    # - Sự cố P1 Nghẽn mạng: calls_failed >= 2 VÀ error_rate >= 0.35
-    # - Sự cố P2 Quá tải chiến dịch: calls_total >= 11 (hoặc Z-score >= 2.2 và calls_total >= 7)
-    # - Sự cố Bot kẹt: calls_total >= 5, calls_connected >= 3 nhưng avg_duration <= 2.0 giây
-    is_p1_drop = (df["calls_total"] == 0) & (df["hour"].between(8, 17)) & (df["is_weekend"] == 0)
-    is_p1_trunk = (df["calls_failed"] >= 2) & (df["error_rate"] >= 0.35)
-    is_p2_spike = (df["calls_total"] >= 11)
-    is_bot_stuck = (df["calls_total"] >= 5) & (df["avg_duration"] <= 2.0)
+    # Tiêu chí sự cố thực tế quy mô 10.000 cuộc gọi/ngày:
+    # - Sự cố P1 PBX Sập: calls_total <= 15 trong giờ hành chính (8h-17h, ngày thường)
+    # - Sự cố P1 Nghẽn mạng: calls_failed >= 20 VÀ error_rate >= 0.30
+    # - Sự cố P2 Quá tải chiến dịch: calls_total >= 550
+    # - Sự cố Bot kẹt: calls_total >= 50, calls_connected >= 20 nhưng avg_duration <= 3.0 giây
+    is_p1_drop = (df["calls_total"] <= 15) & (df["hour"].between(8, 17)) & (df["is_weekend"] == 0)
+    is_p1_trunk = (df["calls_failed"] >= 20) & (df["error_rate"] >= 0.30)
+    is_p2_spike = (df["calls_total"] >= 550)
+    is_bot_stuck = (df["calls_total"] >= 50) & (df["avg_duration"] <= 3.0)
 
     df["is_anomaly_gt"] = (is_p1_drop | is_p1_trunk | is_p2_spike | is_bot_stuck).astype(int)
 

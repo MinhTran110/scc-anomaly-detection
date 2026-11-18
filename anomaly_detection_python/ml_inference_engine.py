@@ -95,9 +95,9 @@ class SCCAnomalyInferenceEngine:
         is_iforest_anom = (raw_pred == -1)
 
         # 2. Luật Thống Kê cứng bảo vệ (Fail-safe Hard Rules)
-        is_p1_drop = (calls_total == 0) and (8 <= hour <= 17) and (dayofweek < 5)
-        is_p1_err = (calls_failed >= 2) and (error_rate >= 0.35)
-        is_p2_vol = (calls_total >= 11)
+        is_p1_drop = (calls_total <= 15) and (8 <= hour <= 17) and (dayofweek < 5)
+        is_p1_err = (calls_failed >= 20) and (error_rate >= 0.30)
+        is_p2_vol = (calls_total >= 550)
 
         is_anomaly = is_iforest_anom or is_p1_drop or is_p1_err or is_p2_vol
 
@@ -112,12 +112,12 @@ class SCCAnomalyInferenceEngine:
         # 4. Trích xuất lý do chi phối
         reasons = []
         if is_p1_drop:
-            reasons.append("Sập lưu lượng đột ngột (0 cuộc gọi trong giờ hành chính)")
-        if error_rate >= 0.30:
+            reasons.append(f"Sập lưu lượng đột ngột ({calls_total} cuộc trong giờ hành chính)")
+        if error_rate >= 0.20:
             reasons.append(f"Tỷ lệ lỗi viễn thông cao ({error_rate*100:.1f}%, nhà mạng: {failed_carrier}, mã: {specific_error})")
-        if calls_total >= 10:
+        if calls_total >= 500:
             reasons.append(f"Đột biến lưu lượng quá tải ({calls_total} cuộc/15p)")
-        if calls_total >= 4 and avg_duration <= 2.0:
+        if calls_total >= 50 and avg_duration <= 3.0:
             reasons.append(f"Nghi vấn kẹt Bot quay số (thời lượng chỉ đạt {avg_duration:.1f}s)")
 
         reason_str = "; ".join(reasons) if reasons else ("Điểm bất thường đa biến do ML phát hiện" if is_anomaly else "Vận hành ổn định")

@@ -10,13 +10,26 @@ Chức năng:
 6. Đồng bộ tổng hợp chuỗi thời gian 15-phút (15-min bucket aggregation) vào public.call_timeseries.
 """
 import os
+import time
 from pathlib import Path
 import logging
+import math
 from typing import List, Dict, Any, Optional
 import psycopg2
 from psycopg2.extras import execute_values
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+def _safe_int(val, default=0):
+    if val is None:
+        return default
+    try:
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return default
+        return int(f)
+    except Exception:
+        return default
 
 def _load_env_file():
     """Tự động tìm và đọc file .env nếu biến môi trường chưa được nạp."""
@@ -36,10 +49,10 @@ def _load_env_file():
                             k, v = line.split("=", 1)
                             k = k.strip()
                             v = v.strip().strip("'\"")
-                            if k not in os.environ or not os.environ[k]:
-                                os.environ[k] = v
+                            os.environ[k] = v
             except Exception:
                 pass
+            break
 
 class DBWriter:
     def __init__(self):
@@ -71,6 +84,8 @@ class DBWriter:
 
         # Cấu hình Mục tiêu 2 (DB2 - Máy chủ ngoài, ví dụ MinhTQ70 trên port 5432)
         db2_host = os.environ.get("DB2_HOST")
+        if db2_host in ("host.docker.internal", "localhost", "127.0.0.1"):
+            db2_host = "172.18.0.1"
         if db2_host:
             db2_port = int(os.environ.get("DB2_PORT", 5432))
             db2_name = os.environ.get("DB2_NAME", "postgres")
@@ -99,6 +114,12 @@ class DBWriter:
         if conn is not None and conn.closed == 0:
             return conn
 
+        # Cooldown check: nếu target từng thử thất bại, không thử lại liên tục trong 60s để tránh nghẽn luồng
+        now_ts = time.time()
+        last_failed = target.get("last_failed_ts", 0)
+        if now_ts - last_failed < 60:
+            return None
+
         # Danh sách địa chỉ (host, port) thử kết nối (hỗ trợ cả chạy trong Docker lẫn chạy trực tiếp ngoài Host)
         endpoints = [(target["host"], target["port"])]
         if target["host"] == "db":
@@ -115,12 +136,13 @@ class DBWriter:
                     dbname=target["dbname"],
                     user=target["user"],
                     password=target["password"],
-                    connect_timeout=3
+                    connect_timeout=1
                 )
                 conn.autocommit = True
                 target["conn"] = conn
                 target["active_host"] = h
                 target["active_port"] = p
+                target["last_failed_ts"] = 0
                 if not target.get("initialized"):
                     self._ensure_tables(target)
                     target["initialized"] = True
@@ -128,7 +150,8 @@ class DBWriter:
             except Exception as e:
                 last_err = e
 
-        logging.warning(f"⚠️ [DBWriter] Chưa thể kết nối {target['id']} ({target['host']}:{target['port']}/{target['dbname']}): {last_err}")
+        target["last_failed_ts"] = time.time()
+        logging.warning(f"⚠️ [DBWriter] Chưa thể kết nối {target['id']} ({target['host']}:{target['port']}/{target['dbname']}): {last_err} (sẽ thử lại sau 60s)")
         target["conn"] = None
         return None
 
@@ -186,10 +209,10 @@ class DBWriter:
         """
         data_tuples_stream = [
             (
-                int(r["call_id"]),
-                str(r["start_time"]),
-                str(r["end_time"]),
-                int(r.get("duration", 0)),
+                _safe_int(r.get("call_id")),
+                str(r.get("start_time", "")),
+                str(r.get("end_time", "")),
+                _safe_int(r.get("duration", 0)),
                 str(r.get("result_code", "UNKNOWN")),
                 str(r.get("carrier", "VIETTEL"))
             )
@@ -210,23 +233,26 @@ class DBWriter:
                     cur.execute("SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'calls';")
                     has_calls_table = cur.fetchone() is not None
                     if has_calls_table:
-                        # Lấy map result_code -> result_id
-                        cur.execute("SELECT result_code, result_id FROM public.call_results;")
-                        res_map = dict(cur.fetchall())
+                        if "res_map" not in target:
+                            cur.execute("SELECT result_code, result_id FROM public.call_results;")
+                            target["res_map"] = dict(cur.fetchall())
+                        res_map = target["res_map"]
 
-                        # Đảm bảo cột carrier đã có trong calls
-                        cur.execute("ALTER TABLE public.calls ADD COLUMN IF NOT EXISTS carrier VARCHAR(50) DEFAULT 'VIETTEL';")
+                        if "valid_custs" not in target:
+                            cur.execute("SELECT customer_id FROM public.campaign_targets WHERE campaign_id = 1;")
+                            target["valid_custs"] = [row[0] for row in cur.fetchall()] or [1]
+                        valid_custs = target["valid_custs"]
 
                         calls_tuples = [
                             (
-                                int(r["call_id"]),
-                                int(r.get("campaign_id", 1)),
-                                int(r.get("customer_id", 1)),
-                                int(r.get("employee_id", 2)),
+                                _safe_int(r.get("call_id")),
+                                1,
+                                valid_custs[_safe_int(r.get("customer_id", 1)) % len(valid_custs)],
+                                _safe_int(r.get("employee_id", 2), default=2),
                                 res_map.get(str(r.get("result_code")), 1),
-                                str(r["start_time"]),
-                                str(r["end_time"]),
-                                int(r.get("duration", 0)),
+                                str(r.get("start_time", "")),
+                                str(r.get("end_time", "")),
+                                _safe_int(r.get("duration", 0)),
                                 str(r.get("carrier", "VIETTEL")),
                                 "Simulated Call Event"
                             )

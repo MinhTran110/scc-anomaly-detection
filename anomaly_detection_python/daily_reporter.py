@@ -54,11 +54,11 @@ MIN_CALL_FLOOR = BAYES_PRIOR.get("min_call_volume_floor", 4)
 MIN_FAIL_FLOOR = BAYES_PRIOR.get("min_fail_count_floor", 2)
 MIN_SPIKE_VOLUME_FLOOR = BAYES_PRIOR.get("min_spike_volume_floor", 8)
 
-def compute_dynamic_error_threshold(n_calls: int, base_threshold: float = 0.15) -> float:
+def compute_dynamic_error_threshold(n_calls: int, base_threshold: float = 0.08) -> float:
     """
     Thuật toán Ngưỡng Động Tỷ Lệ Lỗi (Wilson Score Upper Bound).
-    - Cỡ mẫu nhỏ (N = 3 - 5): Ngưỡng tự động nới lỏng ~35 - 40%, tránh báo động giả.
-    - Cỡ mẫu lớn (N >= 20): Ngưỡng siết chặt về mức chuẩn 20 - 25%.
+    - Cỡ mẫu nhỏ: Ngưỡng tự động nới lỏng ~30 - 35%, tránh báo động giả.
+    - Cỡ mẫu lớn (N >= 100): Ngưỡng siết chặt về mức chuẩn 8 - 12%.
     """
     if n_calls <= 0:
         return 0.35
@@ -155,30 +155,29 @@ def process_single_date(df_date, the_date, is_live_today: bool = False, active_b
     ts["dynamic_threshold"] = ts["calls_total"].apply(compute_dynamic_error_threshold)
     ts["zscore"] = np.where(ts["sd"] > 0, (ts["calls_total"] - ts["mu"]) / ts["sd"], 0.0).round(2)
 
-    # 1. P1 Lỗi hạ tầng viễn thông: Tỷ lệ lỗi >= Ngưỡng động VÀ có ít nhất 2 cuộc lỗi (hiển thị trên Đồ thị 2)
+    # 1. P1 Lỗi hạ tầng viễn thông: Tỷ lệ lỗi >= Ngưỡng động VÀ đạt ngưỡng sàn lỗi (hiển thị trên Đồ thị 2)
     ts["is_p1_net"] = (
         ts["is_completed"] & 
         (ts["error_rate"] >= ts["dynamic_threshold"]) & 
-        (ts["calls_total"] >= 4) & 
-        (ts["calls_failed"] >= 2)
+        (ts["calls_total"] >= MIN_CALL_FLOOR) & 
+        (ts["calls_failed"] >= MIN_FAIL_FLOOR)
     )
 
-    # 2. P1 Sập lưu lượng PBX: Lưu lượng rơi về 0 trong giờ làm việc (mu >= 2.5) (hiển thị trên Đồ thị 1)
+    # 2. P1 Sập lưu lượng PBX: Lưu lượng rơi về sát 0 (<= 15 cuộc) trong giờ làm việc (mu >= 50) (hiển thị trên Đồ thị 1)
     ts["is_p1_drop"] = (
         ts["is_completed"] & 
-        (ts["calls_total"] == 0) & 
-        (ts["mu"] >= 2.5)
+        (ts["calls_total"] <= 15) & 
+        (ts["mu"] >= 50.0)
     )
 
     ts["is_p1_red"] = ts["is_p1_net"] | ts["is_p1_drop"]
 
-    # 3. P2 Đột biến tải chiến dịch (Traffic Spike): Chạm hoặc vượt Capacity Upper Limit, hoặc Z >= 2.0, hoặc volume >= 9
+    # 3. P2 Đột biến tải chiến dịch (Traffic Spike): Chạm hoặc vượt Capacity Upper Limit, hoặc Z >= 2.5 và volume >= MIN_SPIKE_VOLUME_FLOOR
     ts["is_p2_yellow"] = (
         ts["is_completed"] & 
         (
             (ts["calls_total"] >= ts["upper_limit"]) | 
-            ((ts["zscore"] >= 2.0) & (ts["calls_total"] >= 7)) |
-            (ts["calls_total"] >= 9)
+            ((ts["zscore"] >= 2.5) & (ts["calls_total"] >= MIN_SPIKE_VOLUME_FLOOR))
         ) & 
         (~ts["is_p1_drop"])
     )

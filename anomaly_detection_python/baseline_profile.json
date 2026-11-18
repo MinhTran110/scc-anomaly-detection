@@ -1,158 +1,159 @@
 {
-  "model_version": "v2.0-ml-dynamic",
-  "description": "Baseline dong hoc tu du lieu lich su thang 5/2026 ket hop Bayesian Smoothing",
+  "model_version": "v3.0-scale-10k",
+  "description": "Baseline dong hoc quy mo 10.000 cuoc goi/ngay cho SCC Outbound Call Center",
   "bayesian_prior": {
     "p0_baseline_error_rate": 0.02,
-    "pseudo_counts_C": 20,
-    "alpha": 0.4,
-    "beta": 19.6,
-    "min_call_volume_floor": 5,
-    "min_fail_count_floor": 2
+    "pseudo_counts_C": 100,
+    "alpha": 2.0,
+    "beta": 98.0,
+    "min_call_volume_floor": 50,
+    "min_fail_count_floor": 10,
+    "min_spike_volume_floor": 500
   },
   "hourly_baseline_15min": {
-    "0": {
-      "mu": 0.2,
-      "sd": 0.8,
-      "upper_limit": 2.6,
-      "lower_limit": 0.0
-    },
-    "1": {
-      "mu": 0.2,
-      "sd": 0.8,
-      "upper_limit": 2.6,
-      "lower_limit": 0.0
-    },
-    "2": {
-      "mu": 0.2,
-      "sd": 0.8,
-      "upper_limit": 2.6,
-      "lower_limit": 0.0
-    },
-    "3": {
-      "mu": 0.2,
-      "sd": 0.8,
-      "upper_limit": 2.6,
-      "lower_limit": 0.0
-    },
-    "4": {
-      "mu": 0.2,
-      "sd": 0.8,
-      "upper_limit": 2.6,
-      "lower_limit": 0.0
-    },
-    "5": {
-      "mu": 0.2,
-      "sd": 0.8,
-      "upper_limit": 2.6,
-      "lower_limit": 0.0
-    },
-    "6": {
-      "mu": 0.2,
-      "sd": 0.8,
-      "upper_limit": 2.6,
-      "lower_limit": 0.0
-    },
-    "7": {
-      "mu": 0.37,
-      "sd": 0.8,
-      "upper_limit": 2.77,
-      "lower_limit": 0.0
-    },
-    "8": {
-      "mu": 1.07,
-      "sd": 0.93,
-      "upper_limit": 3.4,
-      "lower_limit": 0.0
-    },
-    "9": {
-      "mu": 2.16,
-      "sd": 2.1,
-      "upper_limit": 7.41,
-      "lower_limit": 0.0
-    },
-    "10": {
-      "mu": 2.25,
-      "sd": 2.19,
-      "upper_limit": 7.72,
-      "lower_limit": 0.0
-    },
-    "11": {
-      "mu": 2.27,
-      "sd": 2.16,
-      "upper_limit": 7.67,
-      "lower_limit": 0.0
-    },
-    "12": {
-      "mu": 0.89,
-      "sd": 0.8,
-      "upper_limit": 2.89,
-      "lower_limit": 0.0
-    },
-    "13": {
-      "mu": 1.13,
-      "sd": 0.92,
-      "upper_limit": 3.43,
-      "lower_limit": 0.0
-    },
-    "14": {
-      "mu": 2.19,
-      "sd": 1.97,
-      "upper_limit": 7.12,
-      "lower_limit": 0.0
-    },
-    "15": {
-      "mu": 2.11,
-      "sd": 2.09,
-      "upper_limit": 7.33,
-      "lower_limit": 0.0
-    },
-    "16": {
-      "mu": 2.06,
-      "sd": 1.8,
-      "upper_limit": 6.56,
-      "lower_limit": 0.0
-    },
-    "17": {
-      "mu": 0.89,
-      "sd": 0.8,
-      "upper_limit": 2.89,
-      "lower_limit": 0.0
-    },
     "18": {
-      "mu": 0.34,
-      "sd": 0.8,
-      "upper_limit": 2.74,
+      "mu": 5.0,
+      "sd": 3.0,
+      "upper_limit": 15.0,
       "lower_limit": 0.0
     },
     "19": {
-      "mu": 0.36,
-      "sd": 0.8,
-      "upper_limit": 2.76,
+      "mu": 5.0,
+      "sd": 3.0,
+      "upper_limit": 15.0,
       "lower_limit": 0.0
     },
     "20": {
-      "mu": 0.33,
-      "sd": 0.8,
-      "upper_limit": 2.73,
+      "mu": 5.0,
+      "sd": 3.0,
+      "upper_limit": 15.0,
       "lower_limit": 0.0
     },
     "21": {
-      "mu": 0.2,
-      "sd": 0.8,
-      "upper_limit": 2.6,
+      "mu": 5.0,
+      "sd": 3.0,
+      "upper_limit": 15.0,
       "lower_limit": 0.0
     },
     "22": {
-      "mu": 0.2,
-      "sd": 0.8,
-      "upper_limit": 2.6,
+      "mu": 5.0,
+      "sd": 3.0,
+      "upper_limit": 15.0,
       "lower_limit": 0.0
     },
     "23": {
-      "mu": 0.2,
-      "sd": 0.8,
-      "upper_limit": 2.6,
+      "mu": 5.0,
+      "sd": 3.0,
+      "upper_limit": 15.0,
       "lower_limit": 0.0
+    },
+    "0": {
+      "mu": 5.0,
+      "sd": 3.0,
+      "upper_limit": 15.0,
+      "lower_limit": 0.0
+    },
+    "1": {
+      "mu": 5.0,
+      "sd": 3.0,
+      "upper_limit": 15.0,
+      "lower_limit": 0.0
+    },
+    "2": {
+      "mu": 5.0,
+      "sd": 3.0,
+      "upper_limit": 15.0,
+      "lower_limit": 0.0
+    },
+    "3": {
+      "mu": 5.0,
+      "sd": 3.0,
+      "upper_limit": 15.0,
+      "lower_limit": 0.0
+    },
+    "4": {
+      "mu": 5.0,
+      "sd": 3.0,
+      "upper_limit": 15.0,
+      "lower_limit": 0.0
+    },
+    "5": {
+      "mu": 5.0,
+      "sd": 3.0,
+      "upper_limit": 15.0,
+      "lower_limit": 0.0
+    },
+    "6": {
+      "mu": 5.0,
+      "sd": 3.0,
+      "upper_limit": 15.0,
+      "lower_limit": 0.0
+    },
+    "7": {
+      "mu": 5.0,
+      "sd": 3.0,
+      "upper_limit": 15.0,
+      "lower_limit": 0.0
+    },
+    "8": {
+      "mu": 135.0,
+      "sd": 20.0,
+      "upper_limit": 185.0,
+      "lower_limit": 85.0
+    },
+    "9": {
+      "mu": 320.0,
+      "sd": 35.0,
+      "upper_limit": 407.5,
+      "lower_limit": 232.5
+    },
+    "10": {
+      "mu": 360.0,
+      "sd": 40.0,
+      "upper_limit": 460.0,
+      "lower_limit": 260.0
+    },
+    "11": {
+      "mu": 340.0,
+      "sd": 38.0,
+      "upper_limit": 435.0,
+      "lower_limit": 245.0
+    },
+    "12": {
+      "mu": 95.0,
+      "sd": 18.0,
+      "upper_limit": 140.0,
+      "lower_limit": 50.0
+    },
+    "13": {
+      "mu": 160.0,
+      "sd": 25.0,
+      "upper_limit": 222.5,
+      "lower_limit": 97.5
+    },
+    "14": {
+      "mu": 350.0,
+      "sd": 38.0,
+      "upper_limit": 445.0,
+      "lower_limit": 255.0
+    },
+    "15": {
+      "mu": 370.0,
+      "sd": 40.0,
+      "upper_limit": 470.0,
+      "lower_limit": 270.0
+    },
+    "16": {
+      "mu": 320.0,
+      "sd": 35.0,
+      "upper_limit": 407.5,
+      "lower_limit": 232.5
+    },
+    "17": {
+      "mu": 100.0,
+      "sd": 20.0,
+      "upper_limit": 150.0,
+      "lower_limit": 50.0
     }
   }
 }
