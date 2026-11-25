@@ -28,9 +28,9 @@ flowchart LR
 1. **Thu thập CDR thời gian thực:** Cuộc gọi phát sinh từ tổng đài SCC được đẩy tức thì vào **Redis Stream** (`scc_call_stream`) qua cơ chế non-blocking, giải phóng I/O và không làm nghẽn tổng đài.
 2. **Ghi nhận & Tổng hợp chuỗi thời gian:** `db_writer.py` nạp dữ liệu thô vào `calls_stream` và lưu đệm tại `stream_buffer.csv` theo cơ chế ghi vi sai (`mode="a"`). Định kỳ 15 phút, thủ tục PL/pgSQL thực hiện **Incremental UPSERT** sang bảng `call_timeseries` kết hợp **Zero-imputation** bằng `generate_series()` để đảm bảo lưới thời gian liên tục 100% (38 khung/ngày, từ 08:00 đến 17:30), không bị đứt đoạn.
 3. **Phát hiện bất thường đa tầng (Hybrid Analytics Engine):**
-   - *Bộ lọc rỗng:* Thể tích $V = 0$ trong giờ làm việc ($\mu_h \ge 2.5$) $\rightarrow$ Phát hiện **🔴 P1 Sập PBX (Drop Traffic)**.
-   - *Ngưỡng động Wilson 95% & Sàn Bayes:* Tự động co giãn theo cỡ mẫu $N$ với $z=1.96$ kết hợp sàn mẫu ($N \ge 4$ và $\text{Lỗi} \ge 2$) $\rightarrow$ Triệt tiêu 100% báo động giả ở cỡ mẫu nhỏ, phát hiện **🔴 P1 Nghẽn Mạng SIP Trunk (503 / 504 / 500 / 429)**.
-   - *Thể tích động:* So sánh thể tích $V$ với dải lịch sử chu kỳ 24h $\mu_h \pm 2.5\sigma_h$ (hoặc $Z \ge 2.5$) $\rightarrow$ Phát hiện **🟡 P2 Đột Biến Tải Chiến Dịch (Traffic Spike)**.
+   - *Bộ lọc rỗng:* Thể tích `V = 0` trong giờ làm việc (`μ_h >= 2.5`) ➔ Phát hiện **🔴 P1 Sập PBX (Drop Traffic)**.
+   - *Ngưỡng động Wilson 95% & Sàn Bayes:* Tự động co giãn theo cỡ mẫu `N` với `z = 1.96` kết hợp sàn mẫu (`N >= 4` và `Lỗi >= 2`) ➔ Triệt tiêu 100% báo động giả ở cỡ mẫu nhỏ, phát hiện **🔴 P1 Nghẽn Mạng SIP Trunk (503 / 504 / 500 / 429)**.
+   - *Thể tích động:* So sánh thể tích `V` với dải lịch sử chu kỳ 24h `μ_h ± 2.5σ_h` (hoặc `Z >= 2.5`) ➔ Phát hiện **🟡 P2 Đột Biến Tải Chiến Dịch (Traffic Spike)**.
    - *Mô hình học máy không giám sát:* **Isolation Forest** kiểm tra vector 10 chiều (lưu lượng, tỷ lệ lỗi, thời lượng đàm thoại, độ trễ, mã hóa lượng giác 24h) để phát hiện dị biệt phức tạp (bot kẹt, suy giảm chất lượng).
 4. **Cảnh báo tức thời & Trực quan hóa vận hành:**
    - Kích hoạt **Telegram Bot** gửi thông báo khẩn cấp (HTML + mã lỗi + SOP xử lý) và tự động xuất biểu đồ tổng kết ngày lúc **17:30**.
@@ -44,7 +44,7 @@ Sidebar của hệ thống được tổ chức thành **5 phân hệ chuyên bi
 
 | Phân hệ (Tab) | Vai trò & Tính năng chính |
 | :--- | :--- |
-| **`Live Operations`** | **Giám sát thời gian thực:** Banner trạng thái hệ thống (`HEALTHY`, `WARNING`, `DEGRADED`), Hàng đợi sự cố cần xử lý (Incident Queue), 2 biểu đồ Plotly song song (Lưu lượng vs Vùng an toàn 2.5$\sigma$ và Tỷ lệ lỗi vs Ngưỡng động Wilson 95%), Nhật ký vận hành trong ngày, Bộ lọc lịch kèm nút tắt `⚡ Hôm nay` và `⏮️ Hôm qua`. |
+| **`Live Operations`** | **Giám sát thời gian thực:** Banner trạng thái hệ thống (`HEALTHY`, `WARNING`, `DEGRADED`), Hàng đợi sự cố cần xử lý (Incident Queue), 2 biểu đồ Plotly song song (Lưu lượng vs Vùng an toàn 2.5σ và Tỷ lệ lỗi vs Ngưỡng động Wilson 95%), Nhật ký vận hành trong ngày, Bộ lọc lịch kèm nút tắt `⚡ Hôm nay` và `⏮️ Hôm qua`. |
 | **`Incidents`** | **Điều tra & Quản lý sự cố:** Bộ lọc đa chiều (Mức độ P1/P2, Tuyến nhà mạng, Trạng thái), Hồ sơ điều tra kỹ thuật 2 khối (`What happened` & `How to fix — SOP`), Tra cứu bằng chứng và nhật ký cuộc gọi thô (`Evidence & call logs`), Các nút tác vụ trực ban (`Acknowledge`, `Mark mitigated`, `Incident note`). |
 | **`Analytics`** | **Phân tích chu kỳ & Thống kê sâu:** Phân rã chu kỳ 24h (Diurnal Seasonality), Ma trận nhiệt rủi ro theo từng giờ (Hourly Risk Heatmap), Đánh giá nguy cơ sự cố theo khung giờ cao điểm. |
 | **`Reports`** | **Báo cáo tổng hợp & Đối soát:** Bộ lọc tuần làm việc tự động (Thứ 2 – Thứ 6), Nút `📊 Tổng Hợp Toàn Bộ` dải ngày lịch sử, Thẻ điểm đối soát nhà mạng (Carrier Scorecard: Viettel, VNPT, MobiFone), Xuất báo cáo PDF/PNG. |
@@ -59,9 +59,9 @@ Hệ thống đã huấn luyện và đối chuẩn độc lập 5 mô hình tr�
 | Mô Hình (Model) | Thuật toán | AUC-ROC | PR-AUC | Precision | Recall | F1-Score | Báo động giả (FPR) | Độ trễ suy luận |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Isolation Forest** | Core Tree ML (150 trees) | **0.9904** | **0.9100** | **96.4%** | 42.2% | 0.587 | **0.15%** | **0.02 ms** |
-| **Statistical Rule Engine** | Wilson Score 95% + 2.5$\sigma$ | 0.8342 | 0.8438 | **100.0%** | **82.8%** | **0.906** | **0.00%** | **0.07 ms** |
+| **Statistical Rule Engine** | Wilson Score 95% + 2.5σ | 0.8342 | 0.8438 | **100.0%** | **82.8%** | **0.906** | **0.00%** | **0.07 ms** |
 | **One-Class SVM** | RBF Kernel + RobustScaler | 0.8039 | 0.6080 | 100.0% | 31.3% | 0.476 | 0.00% | 0.01 ms |
-| **Local Outlier Factor** | LOF Density ($k=25$) | 0.4573 | 0.1175 | 15.8% | 4.7% | 0.072 | 2.45% | 0.04 ms |
+| **Local Outlier Factor** | LOF Density (k = 25) | 0.4573 | 0.1175 | 15.8% | 4.7% | 0.072 | 2.45% | 0.04 ms |
 
 > **Cơ chế triển khai thực tế (Hybrid Ensemble):** Kết hợp rào chắn **Statistical Rule Engine** (Precision 100%, triệt tiêu hoàn toàn báo động giả ở cỡ mẫu nhỏ) cùng **Isolation Forest** (nhận diện các tương quan đa biến phức tạp giữa thời lượng đàm thoại, chu kỳ giờ và tỷ lệ rớt cuộc gọi).
 
@@ -78,7 +78,7 @@ Hệ thống đã huấn luyện và đối chuẩn độc lập 5 mô hình tr�
 | **ML Training Pipeline** | `ml_train_pipeline.py` | Trích xuất 10 đặc trưng chuỗi thời gian, chuẩn hóa RobustScaler, huấn luyện đối đầu 5 mô hình và xuất báo cáo đối chuẩn benchmark. |
 | **Real-time Inference** | `ml_inference_engine.py` | Lớp suy luận thời gian thực (< 2ms) nạp mô hình `isolation_forest.joblib` để chấm điểm và phân cấp sự cố. |
 | **Baseline Calibration** | `ml_baseline_trainer.py` | Phân rã chu kỳ ngày/đêm 24h theo từng khung giờ từ dữ liệu lịch sử và xuất file cấu hình `baseline_profile.json`. |
-| **Analytics Engine** | `daily_reporter.py` | Tính toán ngưỡng động Wilson Score 95% ($z=1.96$), sàn lọc mẫu Bayes ($N \ge 4, \text{lỗi} \ge 2$), dải thể tích 2.5$\sigma$, và vẽ biểu đồ tổng kết ngày. |
+| **Analytics Engine** | `daily_reporter.py` | Tính toán ngưỡng động Wilson Score 95% (`z = 1.96`), sàn lọc mẫu Bayes (`N >= 4, lỗi >= 2`), dải thể tích `2.5σ`, và vẽ biểu đồ tổng kết ngày. |
 | **NOC Dashboard** | `dashboard_monitor.py` | Giao diện Streamlit v3.2.2 gồm 5 phân hệ, tối ưu Dark/Light Mode, Native Auto-refresh 10s/lần với bộ nhớ đệm RAM chống quá tải CPU. |
 | **Alerting Bot** | `telegram_notifier.py` | Gửi cảnh báo P1/P2 tức thời và ảnh báo cáo ngày qua Telegram Webhook (hỗ trợ Squid Proxy). |
 
@@ -111,9 +111,9 @@ Các thư viện được khóa phiên bản chính xác trong [`requirements.tx
 
 | Cấp độ | Tên sự cố | Điều kiện kích hoạt | Nguyên nhân cốt lõi | Hành động trực ban (SOP) |
 | :---: | :--- | :--- | :--- | :--- |
-| **🔴 P1** | **Sập Lưu Lượng PBX** | $calls\_total \le 15$ VÀ $\mu_h \ge 50$ (Giờ hành chính) | Tổng đài sập nguồn, kẹt hàng đợi quay số, mất kết nối mạng. | 1. Kiểm tra container tổng đài Asterisk PBX.<br>2. Khởi động lại tiến trình auto-dialer.<br>3. Kiểm tra kết nối mạng nội bộ và database hàng đợi. |
-| **🔴 P1** | **Lỗi Hạ Tầng SIP Trunk** | $\text{ErrorRate} \ge \text{Wilson Threshold}_{95\%}$<br>VÀ $N \ge 4$ VÀ $\text{calls\_failed} \ge 2$ | Tuyến SIP Trunk nhà mạng quá tải, từ chối kết nối (503 / 504 / 500 / 429). | 1. Định vị nhà mạng lỗi (Viettel / VNPT / MobiFone).<br>2. Chuyển tuyến cuộc gọi dự phòng (LCR Failover).<br>3. Liên hệ hotline NOC nhà mạng đối tác. |
-| **🟡 P2** | **Đột Biến Tải Chiến Dịch** | $N \ge \text{Upper Limit}$ HOẶC ($Z \ge 2.5$ VÀ $N \ge 20$) | Chiến dịch Telesale xả cuộc gọi ồ ạt, nguy cơ nghẽn kênh tổng đài. | 1. Yêu cầu bộ phận vận hành giảm tốc độ quay số (CPS).<br>2. Phân bổ chiến dịch ra nhiều dải đầu số (CLI).<br>3. Giám sát tải CPU/RAM máy chủ. |
+| **🔴 P1** | **Sập Lưu Lượng PBX** | `calls_total <= 15`<br>VÀ `μ_h >= 50` *(Giờ hành chính)* | Tổng đài sập nguồn, kẹt hàng đợi quay số, mất kết nối mạng. | 1. Kiểm tra container tổng đài Asterisk PBX.<br>2. Khởi động lại tiến trình auto-dialer.<br>3. Kiểm tra kết nối mạng nội bộ và database hàng đợi. |
+| **🔴 P1** | **Lỗi Hạ Tầng SIP Trunk** | `ErrorRate >= Ngưỡng Wilson 95%`<br>VÀ `N >= 4` VÀ `calls_failed >= 2` | Tuyến SIP Trunk nhà mạng quá tải, từ chối kết nối (503 / 504 / 500 / 429). | 1. Định vị nhà mạng lỗi (Viettel / VNPT / MobiFone).<br>2. Chuyển tuyến cuộc gọi dự phòng (LCR Failover).<br>3. Liên hệ hotline NOC nhà mạng đối tác. |
+| **🟡 P2** | **Đột Biến Tải Chiến Dịch** | `N >= Upper Limit`<br>HOẶC (`Z >= 2.5` VÀ `N >= 20`) | Chiến dịch Telesale xả cuộc gọi ồ ạt, nguy cơ nghẽn kênh tổng đài. | 1. Yêu cầu bộ phận vận hành giảm tốc độ quay số (CPS).<br>2. Phân bổ chiến dịch ra nhiều dải đầu số (CLI).<br>3. Giám sát tải CPU/RAM máy chủ. |
 | **🟢 Normal** | **Vận Hành Ổn Định** | Tất cả chỉ số nằm trong dải an toàn | Hệ thống hoạt động bình thường theo đúng chu kỳ sinh học ngày/tuần. | Tiếp tục duy trì giám sát tự động. |
 
 ---

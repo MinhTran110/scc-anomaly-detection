@@ -1,0 +1,6 @@
+# GitHub Linguist language overrides
+# Exclude SQL files from language breakdown to reflect Python core repository
+timeseries.sql linguist-detectable=false
+*.sql linguist-detectable=false
+*.csv linguist-generated=true
+*.json linguist-generated=true
