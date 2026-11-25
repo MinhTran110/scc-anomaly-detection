@@ -25,10 +25,18 @@ import pandas as pd
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
+try:
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:
+    st_autorefresh = None
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+try:
+    from streamlit_plotly_events import plotly_events
+except ImportError:
+    plotly_events = None
 from PIL import ImageFile
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -282,42 +290,104 @@ div[data-baseweb="input"] svg {{
 }}
 
 div[data-baseweb="popover"],
-div[data-baseweb="popover"] div,
-div[data-baseweb="calendar"],
-div[data-baseweb="calendar"] div {{
+div[data-baseweb="popover"] > div,
+div[data-baseweb="calendar"] {{
     background-color: {card_bg} !important;
-    border-color: {border_col} !important;
-    color: {cal_text_color} !important;
+    border-radius: 12px !important;
 }}
 div[data-baseweb="popover"] {{
-    border-radius: 12px !important;
     border: 1px solid {border_col} !important;
-    box-shadow: 0 10px 25px -5px rgba(0,0,0,0.4) !important;
+    box-shadow: 0 16px 36px rgba(0,0,0,0.45) !important;
     z-index: 1000005 !important;
 }}
-div[data-baseweb="calendar"] * {{
-    color: {cal_text_color} !important;
-    fill: {cal_text_color} !important;
-}}
-div[data-baseweb="calendar"] button {{
+/* Triệt tiêu hoàn toàn nền trắng của BaseWeb calendar header và các container con */
+div[data-baseweb="calendar"] div {{
     background-color: transparent !important;
-    color: {cal_text_color} !important;
-    font-weight: 700 !important;
-    font-size: 14px !important;
+}}
+div[data-baseweb="calendar"] {{
+    background-color: {card_bg} !important;
+    color: {text_main} !important;
+    padding: 8px !important;
+}}
+div[data-baseweb="calendar"] * {{
+    color: {text_main} !important;
+}}
+div[data-baseweb="calendar"] button,
+div[data-baseweb="calendar"] [role="button"] {{
+    background-color: transparent !important;
+    color: {text_main} !important;
     border: none !important;
     cursor: pointer !important;
+    border-radius: 6px !important;
 }}
-div[data-baseweb="calendar"] button:hover {{
-    background-color: {tab_active_bg} !important;
-    color: {tab_active_text} !important;
+div[data-baseweb="calendar"] button:hover,
+div[data-baseweb="calendar"] [role="button"]:hover {{
+    background-color: {"#1e293b" if is_dark else "#e2e8f0"} !important;
 }}
-div[data-baseweb="calendar"] [aria-selected="true"],
-div[data-baseweb="calendar"] [aria-selected="true"] > div {{
-    background-color: #0284c7 !important;
-    color: #ffffff !important;
+div[data-baseweb="calendar"] button svg,
+div[data-baseweb="calendar"] svg {{
+    fill: {text_main} !important;
+    stroke: {text_main} !important;
+}}
+div[data-baseweb="calendar"] [aria-hidden="true"],
+div[data-baseweb="calendar"] [role="presentation"] {{
+    color: {text_muted} !important;
     font-weight: 700 !important;
+    font-size: 12px !important;
+}}
+div[data-baseweb="calendar"] [role="gridcell"] {{
+    color: {text_main} !important;
+    cursor: pointer !important;
+    font-size: 14px !important;
+    font-weight: 600 !important;
+    transition: all 0.15s ease !important;
+}}
+div[data-baseweb="calendar"] [role="gridcell"] > div {{
+    color: {text_main} !important;
+    font-weight: 600 !important;
+    font-size: 14px !important;
     border-radius: 50% !important;
 }}
+div[data-baseweb="calendar"] [role="gridcell"]:hover,
+div[data-baseweb="calendar"] [role="gridcell"]:hover > div {{
+    background-color: #0284c7 !important;
+    color: #ffffff !important;
+}}
+div[data-baseweb="calendar"] [role="gridcell"][aria-selected="true"],
+div[data-baseweb="calendar"] [role="gridcell"][aria-selected="true"] > div,
+div[data-baseweb="calendar"] [aria-selected="true"],
+div[data-baseweb="calendar"] [aria-selected="true"] * {{
+    background-color: #0284c7 !important;
+    color: #ffffff !important;
+    font-weight: 800 !important;
+    border-radius: 50% !important;
+}}
+div[data-baseweb="calendar"] [role="gridcell"]:before {{
+    background-color: {"rgba(2, 132, 199, 0.28)" if is_dark else "rgba(2, 132, 199, 0.15)"} !important;
+}}
+div[data-baseweb="calendar"] [role="gridcell"][aria-disabled="true"],
+div[data-baseweb="calendar"] [role="gridcell"][aria-disabled="true"] > div,
+div[data-baseweb="calendar"] [aria-disabled="true"],
+div[data-baseweb="calendar"] [aria-disabled="true"] * {{
+    color: {"#475569" if is_dark else "#cbd5e1"} !important;
+    opacity: 0.3 !important;
+    cursor: not-allowed !important;
+    background-color: transparent !important;
+}}
+/* Menu dropdown chọn Tháng & Năm trong BaseWeb popover */
+div[data-baseweb="menu"],
+div[data-baseweb="menu"] > ul,
+ul[role="listbox"],
+ul[role="listbox"] * {{
+    background-color: {card_bg} !important;
+    color: {text_main} !important;
+}}
+li[role="option"]:hover,
+li[role="option"][aria-selected="true"] {{
+    background-color: #0284c7 !important;
+    color: #ffffff !important;
+}}
+
 
 /* 8. NÚT BẤM STREAMLIT HIỆN ĐẠI */
 div[data-testid="stButton"] button {{
@@ -372,19 +442,6 @@ div[data-testid="stMetricValue"] * {{
 hr {{
     border-color: {border_col} !important;
     margin: 16px 0 !important;
-}}
-
-/* 8. ẨN HOÀN TOÀN NÚT LÀM MỚI TỰ ĐỘNG KỸ THUẬT (NON-BLOCKING TRIGGER) */
-div:has(#scc-refresh-marker) + div,
-div:has(> * > #scc-refresh-marker) + div,
-div:has(#scc-refresh-marker) ~ div,
-section[data-testid="stSidebar"] div.element-container:has(#scc-refresh-marker) + div.element-container,
-div.element-container:has(button[key="btn_scc_live_tick"]) {{
-    display: none !important;
-    height: 0px !important;
-    position: absolute !important;
-    visibility: hidden !important;
-    pointer-events: none !important;
 }}
 </style>
 """, unsafe_allow_html=True)
@@ -579,12 +636,23 @@ def compute_dynamic_seasonality_and_risk(past_days_ts: dict, today_completed_ts:
 _PAST_DAYS_TS_CACHE = {}
 _PAST_DAYS_SUMMARY_CACHE = {}
 
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _read_stream_snapshot(path_str, mtime, size):
+    """Cache the large CSV read while preserving invalidation on file changes."""
+    try:
+        snapshot = pd.read_csv(path_str)
+        return snapshot if len(snapshot) >= 2 else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
 def load_data_with_db_fallback():
     """Đọc dữ liệu từ file đệm buffer CSV; nếu file lỗi hoặc trống, tự động query trực tiếp từ PostgreSQL."""
     df = None
     if STREAM_FILE.exists() and STREAM_FILE.stat().st_size >= 100:
         try:
-            df = pd.read_csv(STREAM_FILE)
+            stat = STREAM_FILE.stat()
+            df = _read_stream_snapshot(str(STREAM_FILE), stat.st_mtime, stat.st_size)
             if len(df) >= 2:
                 return df
         except Exception:
@@ -625,15 +693,38 @@ def load_data_with_db_fallback():
 
     return pd.DataFrame()
 
+_STREAM_FILE_MTIME = None
+_STREAM_FILE_SIZE = None
+_CACHED_PIPELINE_STATE = None
+
 def get_current_pipeline_state():
     """Đọc dữ liệu buffer với cơ chế fallback tự động vào PostgreSQL, tổng hợp theo khung 15 phút với bộ nhớ đệm chống lag."""
-    global _PAST_DAYS_TS_CACHE, _PAST_DAYS_SUMMARY_CACHE
+    global _PAST_DAYS_TS_CACHE, _PAST_DAYS_SUMMARY_CACHE, _STREAM_FILE_MTIME, _STREAM_FILE_SIZE, _CACHED_PIPELINE_STATE
+
+    try:
+        cur_mtime = STREAM_FILE.stat().st_mtime if STREAM_FILE.exists() else 0
+        cur_size = STREAM_FILE.stat().st_size if STREAM_FILE.exists() else 0
+    except Exception:
+        cur_mtime = 0
+        cur_size = 0
+
+    if _CACHED_PIPELINE_STATE is not None and cur_mtime == _STREAM_FILE_MTIME and cur_size == _STREAM_FILE_SIZE:
+        return _CACHED_PIPELINE_STATE
 
     df = load_data_with_db_fallback()
     if df.empty or len(df) < 2:
         return None, None, None, {}, pd.DataFrame(), {}, pd.DataFrame()
 
-    df["start_time"] = pd.to_datetime(df["start_time"])
+    # The producer buffer is append-only and may contain legacy malformed rows
+    # from an older schema. Coerce invalid timestamps so one bad row cannot
+    # crash every Streamlit tab; discard only rows that cannot be time-indexed.
+    df["start_time"] = pd.to_datetime(df["start_time"], errors="coerce")
+    invalid_start_count = int(df["start_time"].isna().sum())
+    if invalid_start_count:
+        logging.warning("Bỏ qua %s raw rows có start_time không hợp lệ trong stream buffer.", invalid_start_count)
+        df = df.dropna(subset=["start_time"]).copy()
+    if df.empty or len(df) < 2:
+        return None, None, None, {}, pd.DataFrame(), {}, pd.DataFrame()
     df["bucket_time"] = df["start_time"].dt.floor("15min")
     df["date"] = df["start_time"].dt.date
 
@@ -672,7 +763,11 @@ def get_current_pipeline_state():
     ts_today = process_single_date(df_today, current_date, is_live_today=True, active_bucket=active_bucket)
     today_bad_calls = df_today[df_today["result_code"].isin(SYSTEM_ERRORS)].sort_values("start_time", ascending=False) if not df_today.empty else pd.DataFrame()
 
-    return ts_today, today_bad_calls, current_date, past_days_summary, df_today, past_days_ts, df
+    _STREAM_FILE_MTIME = cur_mtime
+    _STREAM_FILE_SIZE = cur_size
+    _CACHED_PIPELINE_STATE = (ts_today, today_bad_calls, current_date, past_days_summary, df_today, past_days_ts, df)
+
+    return _CACHED_PIPELINE_STATE
 
 def get_system_telemetry():
     """Đo lường kiểm tra trạng thái kết nối hạ tầng viễn thông & Dual-Write Database."""
@@ -734,10 +829,12 @@ if "last_producer_date" not in st.session_state:
     st.session_state["cal_date_picker"] = max_hist_date
     st.session_state["is_following_live"] = True
 
+# Chỉ tự động cập nhật khi producer thực sự sinh ngày mới và đang ở chế độ follow live
 if max_hist_date > st.session_state.get("last_producer_date", min_hist_date):
     st.session_state["last_producer_date"] = max_hist_date
     if st.session_state.get("is_following_live", True):
         st.session_state["cal_date_picker"] = max_hist_date
+        st.session_state["_ui_dash_date_input"] = max_hist_date
 
 init_picked = st.session_state.get("cal_date_picker", max_hist_date)
 if hasattr(init_picked, "date"):
@@ -876,6 +973,749 @@ def get_friendly_level(row):
         return "P1 Khẩn cấp", "#ef4444"
     return "P2 Cảnh báo", "#f59e0b"
 
+
+def _incident_key(row):
+    """Tạo mã ổn định cho lựa chọn sự cố trên giao diện."""
+    bucket = row.get("bucket_time")
+    bucket_text = bucket.strftime("%Y-%m-%d %H:%M") if hasattr(bucket, "strftime") else str(bucket)
+    error_text = str(row.get("specific_error", "ANOMALY"))
+    if row.get("is_p1_drop", False):
+        error_text = "DROP_TRAFFIC"
+    elif row.get("is_p2_yellow", False) and error_text in ("", "-"):
+        error_text = "TRAFFIC_SPIKE"
+    return f"{bucket_text} | {error_text}"
+
+
+def render_operational_status_banner(view_date, is_live, flagged, text_main, text_muted, card_bg, border_col):
+    """Hiển thị trạng thái vận hành trước các biểu đồ để NOC thấy sự cố ngay."""
+    try:
+        stream_mtime = STREAM_FILE.stat().st_mtime if STREAM_FILE.exists() else 0
+        if stream_mtime:
+            freshness_seconds = max(0, int(time.time() - stream_mtime))
+            freshness_text = f"{freshness_seconds}s trước"
+            freshness_color = "#16a34a" if freshness_seconds <= 30 else "#f59e0b" if freshness_seconds <= 120 else "#dc2626"
+        else:
+            freshness_text = "Không có snapshot"
+            freshness_color = "#dc2626"
+    except Exception:
+        freshness_text = "Không xác định"
+        freshness_color = "#f59e0b"
+
+    p1_count = int(flagged["is_p1_red"].sum()) if not flagged.empty else 0
+    p2_count = int(flagged["is_p2_yellow"].sum()) if not flagged.empty else 0
+    if p1_count:
+        status_label, status_color = "DEGRADED — CẦN XỬ LÝ", "#dc2626"
+        status_detail = f"{p1_count} sự cố P1 đang hiển thị"
+    elif p2_count:
+        status_label, status_color = "WARNING — ĐANG THEO DÕI", "#d97706"
+        status_detail = f"{p2_count} cảnh báo P2 đang hiển thị"
+    else:
+        status_label, status_color = "HEALTHY — KHÔNG CÓ SỰ CỐ", "#16a34a"
+        status_detail = "Không phát hiện bucket bất thường"
+
+    mode_text = "LIVE" if is_live else "HISTORICAL"
+    st.markdown(f"""
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;
+                background:{card_bg};border:1px solid {border_col};border-left:4px solid {status_color};
+                border-radius:8px;padding:10px 14px;margin:0 0 14px 0;">
+      <div>
+        <div style="font-size:13px;font-weight:800;color:{status_color};">{status_label}</div>
+        <div style="font-size:11.5px;color:{text_muted};margin-top:3px;">{status_detail} · Ngày {view_date.strftime('%d/%m/%Y')}</div>
+      </div>
+      <div style="display:flex;gap:18px;align-items:center;font-size:11.5px;color:{text_muted};">
+        <span><b style="color:#ef4444;">P1 {p1_count}</b></span>
+        <span><b style="color:#f59e0b;">P2 {p2_count}</b></span>
+        <span>Mode: <b style="color:{text_main};">{mode_text}</b></span>
+        <span>Data freshness: <b style="color:{freshness_color};">{freshness_text}</b></span>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_incident_queue(flagged, text_main, text_muted, card_bg, border_col):
+    """Incident-first queue: lỗi, phạm vi, ảnh hưởng và thao tác điều tra."""
+    st.markdown(f"<div style='font-size:16px;font-weight:800;color:{text_main};margin:4px 0 8px 0;'>Sự cố cần xử lý</div>", unsafe_allow_html=True)
+    if flagged.empty:
+        st.success("Không có P1/P2 đang được ghi nhận trong phạm vi đã chọn.")
+        return
+
+    filter_col, sort_col = st.columns([1.2, 3.8])
+    with filter_col:
+        incident_filter = st.selectbox(
+            "Lọc mức độ",
+            ["Tất cả", "Chỉ P1", "Chỉ P2"],
+            key="incident_severity_filter",
+            label_visibility="collapsed",
+        )
+    queue = flagged.copy()
+    if incident_filter == "Chỉ P1":
+        queue = queue[queue["is_p1_red"]]
+    elif incident_filter == "Chỉ P2":
+        queue = queue[queue["is_p2_yellow"]]
+    queue = queue.sort_values(["is_p1_red", "bucket_time"], ascending=[False, True])
+
+    rows = []
+    for _, row in queue.iterrows():
+        level, _ = get_friendly_level(row)
+        total = int(row.get("calls_total", 0))
+        failed = int(row.get("calls_failed", row.get("calls_503", 0)))
+        error_rate = (failed / total * 100) if total else 0.0
+        rows.append({
+            "Mức độ": level,
+            "Khung giờ": row["bucket_time"].strftime("%H:%M"),
+            "Lỗi / bất thường": get_friendly_error(row),
+            "Phạm vi": get_friendly_carrier(row),
+            "Ảnh hưởng": f"{failed}/{total} lỗi ({error_rate:.1f}%)",
+            "incident_key": _incident_key(row),
+        })
+
+    display_rows = pd.DataFrame(rows)
+    if display_rows.empty:
+        st.info("Không có sự cố phù hợp với bộ lọc.")
+        return
+    st.dataframe(
+        display_rows.drop(columns=["incident_key"]),
+        use_container_width=True,
+        hide_index=True,
+        height=min(270, 44 + len(display_rows) * 38),
+        column_config={
+            "Mức độ": st.column_config.TextColumn("Mức độ", width="small"),
+            "Khung giờ": st.column_config.TextColumn("Khung giờ", width="small"),
+            "Lỗi / bất thường": st.column_config.TextColumn("Lỗi / bất thường", width="large"),
+            "Phạm vi": st.column_config.TextColumn("Phạm vi", width="medium"),
+            "Ảnh hưởng": st.column_config.TextColumn("Ảnh hưởng", width="medium"),
+        },
+    )
+
+    selected_key = st.selectbox(
+        "Chọn sự cố để xem nguyên nhân và hướng xử lý",
+        display_rows["incident_key"].tolist(),
+        key="selected_incident_key",
+    )
+    selected_row = queue[queue.apply(_incident_key, axis=1) == selected_key]
+    if not selected_row.empty:
+        selected_bucket = selected_row.iloc[0]["bucket_time"].strftime("%H:%M")
+        if st.button("Mở hồ sơ xử lý sự cố", key="open_selected_incident", type="primary"):
+            st.session_state["active_investigation_bucket"] = selected_bucket
+            st.rerun()
+
+
+def render_incident_response_workspace_legacy(view_date, full_df, flagged, text_main, text_muted, card_bg, border_col):
+    """Production incident queue + investigation workspace.
+
+    This view intentionally consumes only fields currently available in the
+    pipeline. Correlation IDs, application traces and persistent incident
+    workflow records are shown as unavailable until their backend tables exist.
+    """
+    st.markdown(f"<div style='font-size:24px;font-weight:800;color:{text_main};'>Incident Response Workspace</div>", unsafe_allow_html=True)
+    st.caption("Điều tra sự cố độc lập với Live Operations — không lặp lại các biểu đồ giám sát tổng quan.")
+
+    # Build compact incident records from anomaly buckets. Persistence is not
+    # implied: these are detection records until an incidents table is added.
+    records = []
+    for _, row in flagged.iterrows():
+        code = str(row.get("specific_error", "")).strip()
+        if code in ("", "-"):
+            code = "DROP_TRAFFIC" if row.get("is_p1_drop", False) else "TRAFFIC_SPIKE"
+        priority = "P1" if row.get("is_p1_red", False) else "P2"
+        total = int(row.get("calls_total", 0))
+        failed = int(row.get("calls_failed", row.get("calls_503", 0)))
+        rate = failed / total * 100 if total else 0.0
+        incident_id = f"INC-{row['bucket_time'].strftime('%Y%m%d-%H%M')}-{code}"
+        records.append({
+            "incident_id": incident_id,
+            "priority": priority,
+            "error_type": code,
+            "service": get_friendly_carrier(row),
+            "detection_time": row["bucket_time"],
+            "status": st.session_state.get(f"incident_status_{incident_id}", "New"),
+            "operator": st.session_state.get(f"incident_operator_{incident_id}", "Unassigned"),
+            "error_rate": rate,
+            "affected_calls": f"{failed}/{total}",
+            "row": row,
+        })
+
+    queue_df = pd.DataFrame(records)
+    if queue_df.empty:
+        st.success("Không có anomaly bucket để tạo incident trong phạm vi đang xem.")
+        st.info("Incident management hiện sử dụng dữ liệu phát hiện từ time-series. Chưa có bảng incident persistence trong PostgreSQL.")
+        return
+
+    # Queue toolbar: compact filters, no monitoring KPI cards or global charts.
+    f1, f2, f3, f4, f5 = st.columns([1.2, 1.0, 1.3, 1.6, 2.2])
+    with f1:
+        status_filter = st.selectbox("Status", ["All", "New", "Acknowledged", "Investigating", "Mitigated", "Resolved"], key="ir_status")
+    with f2:
+        priority_filter = st.selectbox("Priority", ["All", "P1", "P2", "P3"], key="ir_priority")
+    with f3:
+        assignment_filter = st.selectbox("Assignment", ["All", "Assigned", "Unassigned"], key="ir_assignment")
+    with f4:
+        error_filter = st.selectbox("Error type", ["All"] + sorted(queue_df["error_type"].unique().tolist()), key="ir_error")
+    with f5:
+        search = st.text_input("Search", placeholder="Incident ID, service, error...", key="ir_search")
+
+    filtered = queue_df.copy()
+    if status_filter != "All":
+        filtered = filtered[filtered["status"] == status_filter]
+    if priority_filter != "All":
+        filtered = filtered[filtered["priority"] == priority_filter]
+    if assignment_filter == "Assigned":
+        filtered = filtered[filtered["operator"] != "Unassigned"]
+    elif assignment_filter == "Unassigned":
+        filtered = filtered[filtered["operator"] == "Unassigned"]
+    if error_filter != "All":
+        filtered = filtered[filtered["error_type"] == error_filter]
+    if search.strip():
+        needle = search.strip().lower()
+        mask = filtered[["incident_id", "error_type", "service", "operator"]].astype(str).apply(lambda col: col.str.lower().str.contains(needle, na=False)).any(axis=1)
+        filtered = filtered[mask]
+
+    st.caption(f"{len(filtered)} incident record(s) · {int((queue_df['priority'] == 'P1').sum())} P1 · {int((queue_df['priority'] == 'P2').sum())} P2 · Detection source: time-series")
+    if filtered.empty:
+        st.info("Không có incident phù hợp bộ lọc.")
+        return
+
+    # Use a compact table for the queue; the workspace below is the only place
+    # where investigation details and actions are rendered.
+    queue_view = filtered[["incident_id", "priority", "error_type", "service", "detection_time", "status", "operator"]].copy()
+    queue_view["detection_time"] = queue_view["detection_time"].dt.strftime("%Y-%m-%d %H:%M")
+    st.dataframe(
+        queue_view.rename(columns={"incident_id": "Incident ID", "priority": "Priority", "error_type": "Error Type", "service": "Affected Service", "detection_time": "Detection Time", "status": "Status", "operator": "Assigned Operator"}),
+        use_container_width=True,
+        hide_index=True,
+        height=min(260, 44 + len(queue_view) * 36),
+        column_config={
+            "Incident ID": st.column_config.TextColumn(width="large"),
+            "Priority": st.column_config.TextColumn(width="small"),
+            "Error Type": st.column_config.TextColumn(width="medium"),
+            "Affected Service": st.column_config.TextColumn(width="medium"),
+            "Detection Time": st.column_config.TextColumn(width="medium"),
+        },
+    )
+    selected_id = st.selectbox("Open incident workspace", filtered["incident_id"].tolist(), key="ir_selected_id")
+    selected = filtered[filtered["incident_id"] == selected_id].iloc[0]
+    row = selected["row"]
+    kb_key = selected["error_type"] if selected["error_type"] in TELECOM_ERROR_KB else ("DROP_TRAFFIC" if row.get("is_p1_drop", False) else "TRAFFIC_SPIKE")
+    kb = TELECOM_ERROR_KB.get(kb_key, {})
+
+    st.markdown("---")
+    st.markdown(f"### {selected['incident_id']}")
+    h = st.columns([2.2, 1.0, 1.5, 1.4, 1.2, 1.2, 1.3])
+    h[0].markdown(f"**{selected['error_type']}**\n\n{kb.get('title', selected['error_type'])}")
+    h[1].metric("Priority", selected["priority"])
+    h[2].metric("Service", selected["service"])
+    h[3].metric("Detected", selected["detection_time"].strftime("%H:%M"))
+    h[4].metric("Error rate", f"{selected['error_rate']:.1f}%")
+    h[5].metric("Affected", selected["affected_calls"])
+    h[6].metric("Status", selected["status"])
+
+    left, right = st.columns([2.15, 1.0])
+    with left:
+        trace_tab, logs_tab, evidence_tab = st.tabs(["Trace", "Logs", "Evidence"])
+        with trace_tab:
+            st.markdown("**Chronological event flow**")
+            trace_rows = [{"Time": selected["detection_time"].strftime("%Y-%m-%d %H:%M"), "Event": "Anomaly detected", "Component": selected["service"], "Source": "call_timeseries"}]
+            if kb_key == "DROP_TRAFFIC":
+                trace_rows.append({"Time": selected["detection_time"].strftime("%Y-%m-%d %H:%M"), "Event": "Traffic deviation observed", "Component": selected["service"], "Source": "call_timeseries"})
+            elif kb_key in ("504_GATEWAY_TIMEOUT", "408_REQUEST_TIMEOUT"):
+                trace_rows.append({"Time": selected["detection_time"].strftime("%Y-%m-%d %H:%M"), "Event": "Timeout response observed", "Component": selected["service"], "Source": "calls_stream"})
+            st.dataframe(pd.DataFrame(trace_rows), use_container_width=True, hide_index=True)
+            st.caption("Chỉ hiển thị event có nguồn dữ liệu thực tế. Application trace/SIP packet trace chưa được kết nối.")
+        with logs_tab:
+            log_df = full_df[full_df["bucket_time"] == row["bucket_time"]].copy() if not full_df.empty else pd.DataFrame()
+            if log_df.empty:
+                st.info("Không có raw call log cho incident này.")
+            else:
+                available = [c for c in ["start_time", "call_id", "result_code", "carrier", "duration", "end_time"] if c in log_df.columns]
+                logs = log_df[available].sort_values("start_time", ascending=False).copy()
+                logs.insert(1, "Correlation ID", "Not available")
+                logs.insert(2, "Response Code", logs["result_code"] if "result_code" in logs else "Not available")
+                st.dataframe(logs, use_container_width=True, hide_index=True, height=300)
+                st.caption("Correlation ID và application logs chưa tồn tại trong các nguồn dữ liệu hiện tại; không tự sinh giá trị.")
+        with evidence_tab:
+            e1, e2, e3 = st.columns(3)
+            e1.metric("Actual calls", int(row.get("calls_total", 0)))
+            e2.metric("Baseline μ", f"{float(row.get('mu', 0)):.1f}")
+            e3.metric("Deviation", f"{float(row.get('zscore', 0)):.2f}σ")
+            evidence = {
+                "Metric": ["Error rate", "Detection threshold", "Baseline μ", "Baseline σ", "Z-score", "Affected service", "Detection source"],
+                "Observed": [f"{selected['error_rate']:.2f}%", f"{float(row.get('dynamic_threshold', 0))*100:.2f}%", f"{float(row.get('mu', 0)):.2f}", f"{float(row.get('sd', 0)):.2f}", f"{float(row.get('zscore', 0)):.2f}", selected["service"], "call_timeseries / calls_stream"],
+            }
+            st.dataframe(pd.DataFrame(evidence), use_container_width=True, hide_index=True)
+            if kb_key == "DROP_TRAFFIC":
+                st.info(f"Traffic window: {selected['detection_time'].strftime('%H:%M')}–{(selected['detection_time'] + pd.Timedelta(minutes=15)).strftime('%H:%M')}. Actual vs baseline is available from the metrics above.")
+
+    with right:
+        with st.container(border=True):
+            st.markdown("### Incident Actions")
+            operator_options = ["Unassigned", "NOC Operator 1", "NOC Operator 2", "Supervisor"]
+            operator = st.selectbox("Assignment", operator_options, index=operator_options.index(selected["operator"]) if selected["operator"] in operator_options else 0, key=f"assign_{selected_id}")
+            status_options = ["New", "Acknowledged", "Investigating", "Mitigated", "Resolved"]
+            status = st.selectbox("Current status", status_options, index=status_options.index(selected["status"]) if selected["status"] in status_options else 0, key=f"status_{selected_id}")
+            note = st.text_area("Investigation notes", key=f"notes_{selected_id}", height=120, placeholder="Ghi nhận kiểm tra, ticket, người phối hợp...")
+            if st.button("Add Note", key=f"add_note_{selected_id}", use_container_width=True):
+                st.session_state[f"note_saved_{selected_id}"] = note
+                st.success("Đã lưu note trong phiên UI hiện tại.")
+            if st.button("Acknowledge", key=f"ack_workspace_{selected_id}", use_container_width=True):
+                st.session_state[f"incident_status_{selected_id}"] = "Acknowledged"
+                st.session_state[f"incident_operator_{selected_id}"] = operator
+                st.rerun()
+            if st.button("Escalate", key=f"escalate_{selected_id}", use_container_width=True):
+                st.warning("Escalation UI đã ghi nhận trong phiên hiện tại; chưa tích hợp ticketing backend.")
+            st.markdown("**Resolution**")
+            resolution = st.text_area("Resolution summary", key=f"resolution_{selected_id}", height=90, placeholder="Bắt buộc khi đóng incident...")
+            verified = st.checkbox("Đã xác minh error rate đã trở về ngưỡng an toàn", key=f"verified_{selected_id}")
+            if st.button("Resolve incident", key=f"resolve_{selected_id}", type="primary", use_container_width=True):
+                if not resolution.strip() or not verified:
+                    st.error("Cần nhập resolution summary và xác minh hệ thống trước khi resolve.")
+                else:
+                    st.session_state[f"incident_status_{selected_id}"] = "Resolved"
+                    st.session_state[f"incident_operator_{selected_id}"] = operator
+                    st.success("Incident đã được đánh dấu Resolved trong phiên UI hiện tại.")
+            st.caption("Persistence backend: chưa triển khai bảng incidents/incident_events; trạng thái hiện được giữ trong session Streamlit.")
+
+
+def render_incidents_page_legacy(view_date, full_df, flagged, text_main, text_muted, card_bg, border_col):
+    """Trang điều tra sự cố độc lập: lọc, evidence, log cuộc gọi và SOP."""
+    st.markdown(f"<div style='font-size:24px;font-weight:800;color:{text_main};'>Incident Management</div>", unsafe_allow_html=True)
+    st.caption("Tra cứu lỗi theo ngày, mã lỗi và phạm vi; xem raw call log cùng hướng dẫn xử lý tương ứng.")
+
+    # Bộ lọc ngày riêng của Incident Management. Không dùng cal_date_picker của
+    # Live Operations để tránh việc đổi ngày ở một tab làm thay đổi tab khác.
+    available_dates = sorted(full_df["date"].dropna().unique()) if not full_df.empty and "date" in full_df.columns else [view_date]
+    min_inc_date = available_dates[0] if available_dates else view_date
+    max_inc_date = available_dates[-1] if available_dates else view_date
+    incident_date = st.session_state.get("incident_management_date", view_date)
+    if incident_date < min_inc_date or incident_date > max_inc_date:
+        incident_date = max_inc_date
+
+    date_col, _, mode_col = st.columns([1.6, 1.5, 1.8])
+    with date_col:
+        incident_date = st.date_input(
+            "Ngày tra cứu incident",
+            value=incident_date,
+            min_value=min_inc_date,
+            max_value=max_inc_date,
+            format="YYYY-MM-DD",
+            key="incident_management_date_picker",
+            help="Bộ chọn ngày độc lập của Incident Management; không thay đổi ngày trong Live Operations.",
+        )
+    st.session_state["incident_management_date"] = incident_date
+    with mode_col:
+        st.markdown(f"<div style='margin-top:28px;color:{text_muted};font-size:12px;'>Đang tra cứu: <b style='color:{text_main};'>{incident_date.strftime('%d/%m/%Y')}</b></div>", unsafe_allow_html=True)
+
+    incident_df = full_df[full_df["date"] == incident_date].copy() if not full_df.empty else pd.DataFrame()
+    incident_ts = process_single_date(incident_df, incident_date, is_live_today=False) if not incident_df.empty else pd.DataFrame()
+    incident_flagged = incident_ts[incident_ts["is_p1_red"] | incident_ts["is_p2_yellow"]].copy() if not incident_ts.empty else pd.DataFrame()
+    if incident_flagged.empty:
+        st.success("Không phát hiện bucket bất thường trong ngày đã chọn.")
+        return
+
+    c1, c2, c3 = st.columns([1.35, 1.6, 1.6])
+    with c1:
+        error_options = ["Tất cả"] + sorted({str(r.get("specific_error", "")).strip() for _, r in incident_flagged.iterrows() if str(r.get("specific_error", "")).strip() not in ("", "-")})
+        error_filter = st.selectbox("Loại lỗi", error_options, key="inc_error_type_filter")
+    with c2:
+        service_options = ["Tất cả"] + sorted({get_friendly_carrier(r) for _, r in incident_flagged.iterrows()})
+        carrier_filter = st.selectbox("Nhà mạng / Phạm vi", service_options, key="inc_service_filter")
+    with c3:
+        status_filter = st.selectbox("Trạng thái phát hiện", ["Tất cả", "P1/P2 đang cảnh báo"], key="inc_detection_status_filter")
+
+    flagged = incident_flagged.copy()
+    if error_filter != "Tất cả":
+        flagged = flagged[flagged["specific_error"].astype(str) == error_filter]
+    if carrier_filter != "Tất cả":
+        flagged = flagged[flagged.apply(lambda r: get_friendly_carrier(r) == carrier_filter, axis=1)]
+    # Chỉ có trạng thái phát hiện từ anomaly engine ở bản demo; không giả lập
+    # workflow New/Acknowledged/Resolved khi chưa có incident persistence.
+    if status_filter == "P1/P2 đang cảnh báo":
+        flagged = flagged[flagged["is_p1_red"] | flagged["is_p2_yellow"]]
+
+    if flagged.empty:
+        st.info("Không có lỗi phù hợp với các bộ lọc đã chọn.")
+        return
+
+    table = []
+    for _, row in flagged.iterrows():
+        total = int(row.get("calls_total", 0))
+        failed = int(row.get("calls_failed", row.get("calls_503", 0)))
+        raw_code = str(row.get("specific_error", "")).strip()
+        lookup_code = raw_code if raw_code not in ("", "-") else ("DROP_TRAFFIC" if row.get("is_p1_drop", False) else "TRAFFIC_SPIKE")
+        table.append({
+            "Mã lỗi": lookup_code,
+            "Mức cảnh báo": "P1" if row.get("is_p1_red", False) else "P2",
+            "Thời điểm": row["bucket_time"].strftime("%H:%M"),
+            "Mô tả": get_friendly_error(row),
+            "Nhà mạng / Phạm vi": get_friendly_carrier(row),
+            "Ảnh hưởng": f"{failed}/{total} ({failed / total * 100:.1f}%)" if total else "0/0",
+            "lookup_key": _incident_key(row),
+        })
+    inc_df = pd.DataFrame(table)
+    selected = st.selectbox(
+        "Tra cứu log lỗi theo mã",
+        inc_df["lookup_key"].tolist(),
+        format_func=lambda key: next((f"{r['Mã lỗi']} · {r['Thời điểm']} · {r['Nhà mạng / Phạm vi']}" for _, r in inc_df.iterrows() if r["lookup_key"] == key), key),
+        key="inc_error_log_lookup",
+    )
+    st.dataframe(
+        inc_df.drop(columns=["lookup_key"]),
+        use_container_width=True,
+        hide_index=True,
+        height=min(260, 42 + len(inc_df) * 38),
+        column_config={
+            "Mã lỗi": st.column_config.TextColumn("Mã lỗi", width="medium"),
+            "Mức cảnh báo": st.column_config.TextColumn("Mức cảnh báo", width="small"),
+            "Thời điểm": st.column_config.TextColumn("Thời điểm", width="small"),
+            "Mô tả": st.column_config.TextColumn("Mô tả", width="large"),
+            "Nhà mạng / Phạm vi": st.column_config.TextColumn("Nhà mạng / Phạm vi", width="medium"),
+            "Ảnh hưởng": st.column_config.TextColumn("Ảnh hưởng", width="medium"),
+        },
+    )
+
+    selected_rows = flagged[flagged.apply(_incident_key, axis=1) == selected]
+    if selected_rows.empty:
+        return
+    incident = selected_rows.iloc[0]
+    raw_code = str(incident.get("specific_error", "")).strip()
+    kb_key = raw_code if raw_code in TELECOM_ERROR_KB else ("DROP_TRAFFIC" if incident.get("is_p1_drop", False) else "TRAFFIC_SPIKE" if incident.get("is_p2_yellow", False) else "503_CONGESTION")
+    kb = TELECOM_ERROR_KB[kb_key]
+    total = int(incident.get("calls_total", 0))
+    failed = int(incident.get("calls_failed", incident.get("calls_503", 0)))
+    error_rate = failed / total * 100 if total else 0
+
+    st.markdown("---")
+    st.markdown(f"### {kb['title']}")
+    info1, info2, info3, info4 = st.columns(4)
+    info1.metric("Severity", "P1" if incident.get("is_p1_red", False) else "P2")
+    info2.metric("Error rate", f"{error_rate:.1f}%")
+    info3.metric("Calls affected", f"{failed}/{total}")
+    info4.metric("Bucket", incident["bucket_time"].strftime("%H:%M"))
+
+    st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
+
+    box_bg = "#161f30" if is_dark else "#f8fafc"
+    box_border = "#26354a" if is_dark else "#cbd5e1"
+    evidence_thresh = float(incident.get("dynamic_threshold", 0)) * 100
+
+    detail_left, detail_right = st.columns([1.1, 1.4])
+    with detail_left:
+        st.markdown(f"""
+        <div style="background:{box_bg}; border:1px solid {box_border}; border-radius:8px; padding:16px 18px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+            <div style="font-size:15px; font-weight:700; color:{text_main}; margin-bottom:12px;">What happened</div>
+            <div style="font-size:13px; color:{text_main}; margin-bottom:8px; line-height:1.5;">
+                <b>Protocol/code:</b> <span style="font-family:monospace; color:{'#38bdf8' if is_dark else '#0284c7'}; font-weight:600;">{kb['protocol']}</span>
+            </div>
+            <div style="font-size:13px; color:{text_main}; margin-bottom:8px; line-height:1.5;">
+                <b>Scope:</b> {get_friendly_carrier(incident)}
+            </div>
+            <div style="font-size:13px; color:{text_main}; margin-bottom:8px; line-height:1.5;">
+                <b>Cause:</b> {kb['cause']}
+            </div>
+            <div style="font-size:13px; color:{text_main}; line-height:1.5;">
+                <b>Detection evidence:</b> error rate {error_rate:.1f}%, threshold {evidence_thresh:.1f}%
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with detail_right:
+        actions_list_html = "".join([
+            f"<div style='font-size:13px; color:{text_main}; margin-bottom:8px; line-height:1.5;'><b>{step_no}.</b> {action}</div>"
+            for step_no, action in enumerate(kb["actions"], 1)
+        ])
+        escalation_bg = "#1e293b" if is_dark else "#edf2f7"
+        escalation_border = "#334155" if is_dark else "#cbd5e1"
+        st.markdown(f"""
+        <div style="background:{box_bg}; border:1px solid {box_border}; border-radius:8px; padding:16px 18px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+            <div style="font-size:15px; font-weight:700; color:{text_main}; margin-bottom:12px;">How to fix — SOP</div>
+            <div style="margin-bottom:12px;">
+                {actions_list_html}
+            </div>
+            <div style="background:{escalation_bg}; border:1px solid {escalation_border}; border-radius:6px; padding:10px 12px; font-size:12.5px; color:{text_main}; line-height:1.4;">
+                <b>Escalation:</b> {kb['hotline']}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    log_df = full_df[full_df["bucket_time"] == incident["bucket_time"]].copy() if not full_df.empty else pd.DataFrame()
+    with st.expander("Evidence & call logs", expanded=True):
+        if log_df.empty:
+            st.warning("Không tìm thấy raw call log cho bucket này.")
+        else:
+            log_cols = [c for c in ["call_id", "start_time", "end_time", "duration", "result_code", "carrier"] if c in log_df.columns]
+            st.caption(f"{len(log_df):,} raw events trong bucket {incident['bucket_time'].strftime('%H:%M')}")
+            st.dataframe(log_df[log_cols].sort_values("start_time", ascending=False), use_container_width=True, hide_index=True, height=280)
+
+    st.caption("Bản demo chỉ hiển thị thông tin phát hiện, raw call log và SOP tương ứng; chưa có workflow ghi chú hoặc resolution persistence.")
+
+
+def render_incident_investigation(view_date, full_df, flagged, text_main, text_muted, card_bg, border_col):
+    """Error investigation view backed only by currently available call data.
+
+    No synthetic trace/span/component telemetry is created here. Missing fields
+    are explicitly presented as unavailable.
+    """
+    st.markdown(f"<div style='font-size:24px;font-weight:800;color:{text_main};'>Error Investigation & Traceability</div>", unsafe_allow_html=True)
+
+    dates = sorted(full_df["date"].dropna().unique()) if not full_df.empty and "date" in full_df.columns else [view_date]
+    min_date, max_date = dates[0], dates[-1]
+    default_date = st.session_state.get("incident_investigation_date", view_date)
+    if default_date < min_date or default_date > max_date:
+        default_date = max_date
+    f_date, f_code, f_carrier, f_call = st.columns([1.35, 1.5, 1.5, 2.0])
+    with f_date:
+        selected_date = st.date_input("Ngày / thời gian tra cứu", value=default_date, min_value=min_date, max_value=max_date, format="YYYY-MM-DD", key="incident_investigation_date_picker")
+    st.session_state["incident_investigation_date"] = selected_date
+    scoped = full_df[full_df["date"] == selected_date].copy() if not full_df.empty else pd.DataFrame()
+    codes = sorted(scoped["result_code"].dropna().astype(str).unique().tolist()) if not scoped.empty else []
+    carriers = sorted(scoped["carrier"].dropna().astype(str).unique().tolist()) if not scoped.empty else []
+    with f_code:
+        selected_code = st.selectbox("Error / Result Code", ["All"] + codes, key="incident_investigation_code")
+    with f_carrier:
+        selected_carrier = st.selectbox("Carrier", ["All"] + carriers, key="incident_investigation_carrier")
+    with f_call:
+        call_query = st.text_input("Call ID", placeholder="Tìm chính xác hoặc một phần Call ID", key="incident_investigation_call")
+
+    filtered = scoped.copy()
+    if selected_code != "All":
+        filtered = filtered[filtered["result_code"].astype(str) == selected_code]
+    if selected_carrier != "All":
+        filtered = filtered[filtered["carrier"].astype(str) == selected_carrier]
+    if call_query.strip() and "call_id" in filtered.columns:
+        filtered = filtered[filtered["call_id"].astype(str).str.contains(call_query.strip(), na=False)]
+
+    if filtered.empty:
+        st.info("Không tìm thấy event phù hợp với bộ lọc hiện tại.")
+        return
+
+    # Summary is calculated from the selected raw events, never hardcoded.
+    total_events = len(filtered)
+    failed_events = int(filtered["result_code"].isin(SYSTEM_ERRORS).sum()) if "result_code" in filtered else 0
+    error_rate = failed_events / total_events * 100 if total_events else 0.0
+    summary_cols = st.columns(6)
+    summary_cols[0].metric("Error code", selected_code if selected_code != "All" else "Multiple")
+    summary_cols[1].metric("Total events", f"{total_events:,}")
+    summary_cols[2].metric("Failed calls", f"{failed_events:,}")
+    summary_cols[3].metric("Error rate", f"{error_rate:.2f}%")
+    summary_cols[4].metric("Carrier", selected_carrier if selected_carrier != "All" else "Multiple")
+    summary_cols[5].metric("Call IDs", f"{filtered['call_id'].nunique():,}" if "call_id" in filtered else "N/A")
+
+    if "start_time" in filtered.columns:
+        start_min = filtered["start_time"].min()
+        start_max = filtered["start_time"].max()
+        st.caption(f"Time window: {start_min} → {start_max} · Affected carriers: {', '.join(sorted(filtered['carrier'].dropna().astype(str).unique())) if 'carrier' in filtered else 'Not available'}")
+
+    map_tab, timeline_tab, logs_tab = st.tabs(["System Component Map", "Trace Timeline", "Raw Call Logs"])
+
+    with map_tab:
+        st.markdown("#### System Component Map")
+        map_mode = st.container()
+        with map_mode:
+            selected_path = st.selectbox("System path", ["Call Processing Path", "Data Pipeline Path"], key="incident_component_path")
+        if selected_path == "Call Processing Path":
+            # Chỉ dùng hai node có thể liên hệ với dữ liệu hiện có: producer
+            # tạo call event và carrier xuất hiện trong raw calls. Không suy
+            # diễn SBC/PBX/gateway cụ thể khi chưa có component telemetry.
+            carrier_nodes = sorted(filtered["carrier"].dropna().astype(str).unique()) if "carrier" in filtered else []
+            component_defs = [("Outbound Producer / Dialer", "producer", "source")]
+            component_defs.extend((f"Carrier: {c}", f"carrier:{c}", "carrier") for c in carrier_nodes)
+            # Carriers are parallel scopes/classifications, not sequential
+            # processing steps in one call.
+            edges = [("producer", f"carrier:{c}") for c in carrier_nodes]
+        else:
+            component_defs = [
+                ("Outbound Producer / Dialer", "producer", "source"),
+                ("Redis Stream", "redis", "broker"),
+                ("DB Writer", "writer", "ingestion"),
+                ("PostgreSQL", "postgres", "storage"),
+                ("call_timeseries", "timeseries", "analytics"),
+            ]
+            edges = [("producer", "redis"), ("redis", "writer"), ("writer", "postgres"), ("postgres", "timeseries")]
+        components_available = [name for name, _, _ in component_defs]
+        # Plotly graph: hover/zoom/pan are interactive. Selection is kept in
+        # the clicked node when streamlit-plotly-events is available.
+        positions = {}
+        if selected_path == "Call Processing Path":
+            positions["producer"] = (0, 0)
+            for idx, (_, node_id, _) in enumerate(component_defs[1:]):
+                positions[node_id] = (3.0, (len(component_defs) - 2) / 2 - idx)
+        else:
+            for idx, (_, node_id, _) in enumerate(component_defs):
+                positions[node_id] = (idx * 2.5, 0)
+        edge_x, edge_y = [], []
+        for source_id, target_id in edges:
+            sx, sy = positions[source_id]; tx, ty = positions[target_id]
+            edge_x += [sx, tx, None]; edge_y += [sy, ty, None]
+        graph_fig = go.Figure()
+        if edge_x:
+            graph_fig.add_trace(go.Scatter(x=edge_x, y=edge_y, mode="lines", line=dict(color="#64748b", width=2), hoverinfo="skip", showlegend=False))
+        node_x, node_y, node_text, node_color = [], [], [], []
+        for name, node_id, node_type in component_defs:
+            x, y = positions[node_id]
+            node_x.append(x); node_y.append(y)
+            is_carrier = node_type == "carrier"
+            carrier_name = name.split(": ", 1)[1] if is_carrier else None
+            node_errors = int(filtered[filtered["carrier"].astype(str) == carrier_name]["result_code"].isin(SYSTEM_ERRORS).sum()) if is_carrier and "carrier" in filtered else 0
+            status = "Error recorded" if node_errors else "Observed"
+            node_color.append("#dc2626" if node_errors else "#16a34a")
+            node_text.append(f"<b>{name}</b><br>Status: {status}<br>Events: {len(filtered[filtered['carrier'].astype(str) == carrier_name]) if is_carrier and 'carrier' in filtered else total_events:,}")
+        graph_fig.add_trace(go.Scatter(x=node_x, y=node_y, mode="markers+text", text=[n for n, _, _ in component_defs], textposition="bottom center", textfont=dict(color=text_main, size=11), marker=dict(size=32, color=node_color, line=dict(color="#e2e8f0", width=1.5)), customdata=[node_id for _, node_id, _ in component_defs], hovertext=node_text, hovertemplate="%{hovertext}<extra></extra>", showlegend=False))
+        graph_fig.update_layout(template=plotly_template, height=270, margin=dict(l=20, r=20, t=25, b=55), paper_bgcolor=card_bg, plot_bgcolor=card_bg, xaxis=dict(visible=False), yaxis=dict(visible=False), showlegend=False, hovermode="closest")
+        selected_id = None
+        if plotly_events is not None:
+            clicked = plotly_events(graph_fig, click_event=True, hover_event=False, select_event=False, override_height=270, key=f"component_map_{selected_path}")
+            if clicked:
+                point_index = clicked[0].get("pointIndex")
+                if point_index is not None and 0 <= point_index < len(component_defs):
+                    selected_id = component_defs[point_index][1]
+        else:
+            st.plotly_chart(graph_fig, use_container_width=True, config={"displayModeBar": True, "scrollZoom": True, "displaylogo": False})
+            st.info("Cài `streamlit-plotly-events` để bật chọn component bằng click. Hiện đồ thị vẫn hỗ trợ zoom, pan và hover.")
+
+        if selected_id is None:
+            selected_id = st.session_state.get("selected_component_id")
+        else:
+            st.session_state["selected_component_id"] = selected_id
+
+        if selected_id is None:
+            st.info("Bấm vào một node trên sơ đồ để xem chi tiết component bên dưới.")
+        else:
+            selected_component = next(name for name, node_id, _ in component_defs if node_id == selected_id)
+            is_carrier = selected_id.startswith("carrier:")
+            component_data = filtered[filtered["carrier"].astype(str) == selected_id.split(":", 1)[1]] if is_carrier and "carrier" in filtered else filtered
+            component_errors = int(component_data["result_code"].isin(SYSTEM_ERRORS).sum()) if "result_code" in component_data else 0
+            status = "Error recorded" if is_carrier and component_errors else "Observed"
+            detail = {
+                "Component": selected_component,
+                "Scope": selected_path,
+                "Status": status,
+                "Observed events": f"{len(component_data):,}" if is_carrier else f"{total_events:,}",
+                "Evidence source": "calls_stream/raw data" if is_carrier else "source/configuration",
+            }
+            # Only fields directly attributable to the selected carrier are shown.
+            if is_carrier:
+                detail["Error events"] = f"{component_errors:,}"
+                detail["Error rate"] = f"{component_errors / len(component_data) * 100:.2f}%" if len(component_data) else "0.00%"
+            st.dataframe(pd.DataFrame([detail]), use_container_width=True, hide_index=True)
+
+    with timeline_tab:
+        st.markdown("#### Trace Timeline")
+        timeline_cols = [c for c in ["start_time", "call_id", "result_code", "carrier", "duration", "end_time"] if c in filtered.columns]
+        timeline = filtered[timeline_cols].sort_values("start_time", ascending=True).copy()
+        timeline = timeline.rename(columns={"start_time": "Timestamp", "call_id": "Call ID", "result_code": "Result Code", "carrier": "Carrier", "duration": "Duration (s)", "end_time": "End Time"})
+        st.dataframe(timeline.head(500), use_container_width=True, hide_index=True, height=330)
+        st.caption(f"Đang hiển thị tối đa 500 event trong {len(timeline):,} event phù hợp. Timestamp là start/end call thực tế; request/response span chưa có.")
+
+    with logs_tab:
+        st.markdown("#### Raw Call Logs")
+        log_cols = [c for c in ["call_id", "start_time", "end_time", "duration", "result_code", "carrier"] if c in filtered.columns]
+        st.dataframe(filtered[log_cols].sort_values("start_time", ascending=False).head(500), use_container_width=True, hide_index=True, height=360)
+        st.download_button("Download filtered raw logs", filtered[log_cols].to_csv(index=False).encode("utf-8"), file_name=f"incident_logs_{selected_date}.csv", mime="text/csv")
+
+    # Reference explanation/SOP is shown after evidence, but clearly separated
+    # from measured data and root-cause claims.
+    if selected_code != "All" and selected_code in TELECOM_ERROR_KB:
+        kb = TELECOM_ERROR_KB[selected_code]
+        with st.expander(f"Reference explanation and SOP — {selected_code}"):
+            st.write(f"**Protocol:** {kb['protocol']}")
+            st.write(f"**Reference description:** {kb['cause']}")
+            st.caption("Đây là tài liệu tham khảo theo mã lỗi, không phải kết luận root cause đã xác minh.")
+            for idx, action in enumerate(kb["actions"], 1):
+                st.write(f"{idx}. {action}")
+
+def _incident_records(flagged):
+    records = []
+    for _, row in flagged.iterrows():
+        code = str(row.get("specific_error", "")).strip()
+        if code in ("", "-"):
+            code = "DROP_TRAFFIC" if row.get("is_p1_drop", False) else "TRAFFIC_SPIKE"
+        total = int(row.get("calls_total", 0)); failed = int(row.get("calls_failed", row.get("calls_503", 0)))
+        incident_id = f"INC-{row['bucket_time'].strftime('%Y%m%d-%H%M')}-{code}"
+        records.append({"incident_id": incident_id, "priority": "P1" if row.get("is_p1_red", False) else "P2",
+                        "error_type": code, "service": get_friendly_carrier(row), "detection_time": row["bucket_time"],
+                        "status": st.session_state.get(f"incident_status_{incident_id}", "New"),
+                        "operator": st.session_state.get(f"incident_operator_{incident_id}", "Unassigned"),
+                        "error_rate": failed / total * 100 if total else 0.0, "affected_calls": f"{failed}/{total}", "row": row})
+    return pd.DataFrame(records)
+
+
+def render_incident_queue_only(queue_df):
+    st.markdown("### Incident Queue")
+    st.caption("Chỉ dùng để lọc và chọn incident. Mở tab kế bên để điều tra.")
+    c1, c2, c3, c4, c5 = st.columns([1.2, 1, 1.3, 1.6, 2])
+    status = c1.selectbox("Status", ["All", "New", "Acknowledged", "Investigating", "Mitigated", "Resolved"], key="queue2_status")
+    priority = c2.selectbox("Priority", ["All", "P1", "P2", "P3"], key="queue2_priority")
+    assignment = c3.selectbox("Assignment", ["All", "Assigned", "Unassigned"], key="queue2_assignment")
+    error_type = c4.selectbox("Error Type", ["All"] + sorted(queue_df["error_type"].unique().tolist()), key="queue2_error")
+    search = c5.text_input("Search", key="queue2_search", placeholder="ID, service, error...")
+    view = queue_df.copy()
+    if status != "All": view = view[view.status == status]
+    if priority != "All": view = view[view.priority == priority]
+    if assignment == "Assigned": view = view[view.operator != "Unassigned"]
+    if assignment == "Unassigned": view = view[view.operator == "Unassigned"]
+    if error_type != "All": view = view[view.error_type == error_type]
+    if search.strip():
+        q = search.lower().strip(); cols = ["incident_id", "error_type", "service", "operator"]
+        view = view[view[cols].astype(str).apply(lambda x: x.str.lower().str.contains(q, na=False)).any(axis=1)]
+    st.caption(f"{len(view)} record(s) · {int((queue_df.priority == 'P1').sum())} P1 · {int((queue_df.priority == 'P2').sum())} P2")
+    if view.empty:
+        st.info("Không có incident phù hợp."); return
+    table = view[["incident_id", "priority", "error_type", "service", "detection_time", "status", "operator"]].copy()
+    table["detection_time"] = table["detection_time"].dt.strftime("%Y-%m-%d %H:%M")
+    st.dataframe(table.rename(columns={"incident_id":"Incident ID", "priority":"Priority", "error_type":"Error Type", "service":"Affected Service", "detection_time":"Detection Time", "status":"Status", "operator":"Assigned Operator"}), use_container_width=True, hide_index=True)
+    selected = st.selectbox("Select incident", view.incident_id.tolist(), key="queue2_selected")
+    st.session_state["selected_incident_id"] = selected
+    st.success("Đã chọn incident. Chuyển sang tab Incident Response Workspace để xử lý.")
+
+
+def render_incident_workspace_only(queue_df, full_df):
+    st.markdown("### Incident Response Workspace")
+    selected_id = st.session_state.get("selected_incident_id")
+    if not selected_id or selected_id not in queue_df.incident_id.tolist():
+        st.info("Chưa chọn incident. Hãy chọn một incident trong tab Incident Queue trước."); return
+    selected = queue_df[queue_df.incident_id == selected_id].iloc[0]; row = selected.row
+    code = selected.error_type; kb_key = code if code in TELECOM_ERROR_KB else ("DROP_TRAFFIC" if row.get("is_p1_drop", False) else "TRAFFIC_SPIKE")
+    kb = TELECOM_ERROR_KB.get(kb_key, {})
+    with st.container(border=True):
+        st.markdown(f"**{selected.incident_id}** · `{code}`")
+        h = st.columns(7)
+        for col, label, value in zip(h, ["Priority", "Service", "Detected", "Error rate", "Affected calls", "Status", "Operator"], [selected.priority, selected.service, selected.detection_time.strftime("%H:%M"), f"{selected.error_rate:.1f}%", selected.affected_calls, selected.status, selected.operator]): col.metric(label, value)
+    left, right = st.columns([2.15, 1])
+    with left:
+        trace, logs, evidence = st.tabs(["Trace", "Logs", "Evidence"])
+        with trace:
+            events = [{"Time": selected.detection_time.strftime("%Y-%m-%d %H:%M"), "Event": "Anomaly detected", "Component": selected.service, "Source": "call_timeseries"}]
+            if kb_key == "DROP_TRAFFIC": events.append({"Time": selected.detection_time.strftime("%Y-%m-%d %H:%M"), "Event": "Traffic deviation observed", "Component": selected.service, "Source": "call_timeseries"})
+            elif kb_key in ("504_GATEWAY_TIMEOUT", "408_REQUEST_TIMEOUT"): events.append({"Time": selected.detection_time.strftime("%Y-%m-%d %H:%M"), "Event": "Timeout response observed", "Component": selected.service, "Source": "calls_stream"})
+            st.dataframe(pd.DataFrame(events), use_container_width=True, hide_index=True)
+            st.caption("Chỉ hiển thị event có nguồn dữ liệu hiện có; application/SIP trace chưa được kết nối.")
+        with logs:
+            log = full_df[full_df.bucket_time == row.bucket_time].copy() if not full_df.empty else pd.DataFrame()
+            if log.empty: st.info("Không có raw call log cho incident này.")
+            else:
+                cols = [c for c in ["start_time", "call_id", "result_code", "carrier", "duration", "end_time"] if c in log.columns]
+                st.dataframe(log[cols].sort_values("start_time", ascending=False), use_container_width=True, hide_index=True, height=300)
+                st.caption("Correlation ID và application logs chưa tồn tại trong nguồn dữ liệu hiện tại.")
+        with evidence:
+            st.dataframe(pd.DataFrame({"Metric":["Error rate","Threshold","Baseline μ","Baseline σ","Z-score","Service"], "Observed":[f"{selected.error_rate:.2f}%",f"{float(row.get('dynamic_threshold',0))*100:.2f}%",f"{float(row.get('mu',0)):.2f}",f"{float(row.get('sd',0)):.2f}",f"{float(row.get('zscore',0)):.2f}",selected.service]}), use_container_width=True, hide_index=True)
+            if kb_key == "DROP_TRAFFIC": st.info(f"Anomaly window: {selected.detection_time.strftime('%H:%M')}–{(selected.detection_time + pd.Timedelta(minutes=15)).strftime('%H:%M')}")
+    with right:
+        with st.container(border=True):
+            st.markdown("### Incident Actions")
+            operators = ["Unassigned", "NOC Operator 1", "NOC Operator 2", "Supervisor"]
+            operator = st.selectbox("Assignment", operators, key=f"ws_operator_{selected_id}")
+            status = st.selectbox("Current Status", ["New", "Acknowledged", "Investigating", "Mitigated", "Resolved"], key=f"ws_status_{selected_id}")
+            notes = st.text_area("Investigation Notes", key=f"ws_notes_{selected_id}", height=120)
+            if st.button("Add Note", key=f"ws_note_btn_{selected_id}", use_container_width=True): st.session_state[f"note_{selected_id}"] = notes; st.success("Note đã lưu trong phiên hiện tại.")
+            if st.button("Acknowledge", key=f"ws_ack_{selected_id}", use_container_width=True): st.session_state[f"incident_status_{selected_id}"] = "Acknowledged"; st.session_state[f"incident_operator_{selected_id}"] = operator; st.rerun()
+            if st.button("Escalate", key=f"ws_escalate_{selected_id}", use_container_width=True): st.warning("Escalation UI-only: chưa có ticketing backend.")
+            resolution = st.text_area("Resolution Summary", key=f"ws_resolution_{selected_id}", height=90)
+            verified = st.checkbox("Đã xác minh error rate về ngưỡng an toàn", key=f"ws_verified_{selected_id}")
+            if st.button("Resolve Incident", key=f"ws_resolve_{selected_id}", type="primary", use_container_width=True):
+                if not resolution.strip() or not verified: st.error("Cần resolution summary và verification trước khi resolve.")
+                else: st.session_state[f"incident_status_{selected_id}"] = "Resolved"; st.success("Resolved trong phiên UI hiện tại.")
+            st.caption("Assignment/status/notes hiện chưa persistent trong PostgreSQL.")
+
+
 # ==============================================================================
 # 4. KHỐI HIỂN THỊ CHÍNH (NOC MODULAR VIEW ROUTER)
 # ==============================================================================
@@ -902,6 +1742,7 @@ def render_live_monitoring_fragment():
             parsed_d = datetime.strptime(str(q_val).strip(), "%Y-%m-%d").date()
             if min_date <= parsed_d <= max_date:
                 st.session_state["cal_date_picker"] = parsed_d
+                st.session_state["_ui_dash_date_input"] = parsed_d
                 st.session_state["is_following_live"] = (parsed_d == max_date)
             del st.query_params["date"]
         except Exception:
@@ -911,7 +1752,7 @@ def render_live_monitoring_fragment():
         p_nav = st.query_params["nav"]
         if isinstance(p_nav, list):
             p_nav = p_nav[0]
-        if str(p_nav) in ["Dashboard", "Analysis", "Reports", "System"]:
+        if str(p_nav) in ["Live Operations", "Incidents", "Analytics", "Reports", "System Health"]:
             st.session_state["soc_nav_menu"] = str(p_nav)
         del st.query_params["nav"]
 
@@ -978,7 +1819,7 @@ def render_live_monitoring_fragment():
     flagged = completed_buckets[completed_buckets["is_p1_red"] | completed_buckets["is_p2_yellow"]].copy() if completed_buckets is not None and not completed_buckets.empty else pd.DataFrame()
 
     # --------------------------------------------------------------------------
-    # SIDEBAR ĐIỀU HÀNH 4 MỤC CỐT LÕI (KHÔNG TRÙNG LẶP, KHÔNG ICON, KHÔNG NÚT TRÒN)
+    # SIDEBAR 5 PHÂN HỆ PRODUCTION NOC
     # --------------------------------------------------------------------------
     with st.sidebar:
         st.markdown(f"""
@@ -988,17 +1829,18 @@ def render_live_monitoring_fragment():
         </div>
         """, unsafe_allow_html=True)
 
-        # 4 PHÂN HỆ CỐT LÕI DUY NHẤT
+        # Tách rõ realtime operations, incident response, analytics, reports và health.
         soc_nav_options = [
-            "Dashboard",
-            "Analysis",
+            "Live Operations",
+            "Incidents",
+            "Analytics",
             "Reports",
-            "System"
+            "System Health"
         ]
-        cur_selected = st.session_state.get("soc_nav_menu", "Dashboard")
+        cur_selected = st.session_state.get("soc_nav_menu", "Live Operations")
         if cur_selected not in soc_nav_options:
-            cur_selected = "Dashboard"
-            st.session_state["soc_nav_menu"] = "Dashboard"
+            cur_selected = "Live Operations"
+            st.session_state["soc_nav_menu"] = "Live Operations"
 
         nav_choice = st.radio(
             "DANH MỤC NOC",
@@ -1024,159 +1866,11 @@ def render_live_monitoring_fragment():
         </div>
         """, unsafe_allow_html=True)
 
-        # Trigger làm mới tự động ngầm đặt trong sidebar (ẩn hoàn toàn)
-        st.markdown('<div id="scc-refresh-marker" style="display:none;"></div>', unsafe_allow_html=True)
-        st.button("SCC_AUTO_REFRESH_TRIGGER", key="btn_scc_live_tick")
+    # KÍCH HOẠT AUTO-REFRESH NATIVE BẰNG STREAMLIT-AUTOREFRESH (3 GIÂY / LẦN CHUẨN XÁC, KHÔNG LAG)
+    # Tự động ngắt khi xem ngày cũ hoặc đang điều tra chi tiết sự cố
+    if st_autorefresh and is_realtime_mode and nav_choice == "Live Operations" and not st.session_state.get("active_investigation_bucket"):
+        st_autorefresh(interval=30000, debounce=True, key="scc_live_stream_refresher")
 
-    # --------------------------------------------------------------------------
-    # CHÈN SCRIPT CALENDAR FOOTER (HÔM NAY / HÔM QUA TRONG CHÂN LỊCH POPUP)
-    # --------------------------------------------------------------------------
-    today_str = max_date.strftime("%Y-%m-%d")
-    yesterday_str = yesterday_date.strftime("%Y-%m-%d")
-    today_day = str(max_date.day)
-    yesterday_day = str(yesterday_date.day)
-
-    components.html(f"""
-    <script>
-    (function() {{
-        const pWin = window.parent;
-        const pDoc = window.parent ? window.parent.document : null;
-        if (!pDoc) return;
-
-        function fixCalendarFooter() {{
-            const popovers = pDoc.querySelectorAll('div[data-baseweb="popover"]');
-            popovers.forEach(popover => {{
-                const cal = popover.querySelector('div[data-baseweb="calendar"]');
-                if (!cal) return;
-
-                if (!popover.querySelector('.custom-cal-footer')) {{
-                    const footer = pDoc.createElement('div');
-                    footer.className = 'custom-cal-footer';
-                    footer.style.cssText = 'display:flex;gap:8px;padding:8px 12px;border-top:1px solid {border_col};background:{card_bg};border-radius:0 0 10px 10px;margin-top:4px;';
-
-                    const isReports = ({json.dumps(nav_choice)} === "Reports");
-                    if (isReports) {{
-                        const btnAll = pDoc.createElement('button');
-                        btnAll.type = 'button';
-                        btnAll.innerText = 'Tổng Hợp Toàn Bộ';
-                        btnAll.style.cssText = 'flex:1;padding:7px 12px;font-size:12px;font-weight:600;background:#0284c7;color:#ffffff;border:none;border-radius:6px;cursor:pointer;transition:all 0.15s ease;';
-                        btnAll.onmouseover = () => {{ btnAll.style.background = '#0369a1'; }};
-                        btnAll.onmouseout = () => {{ btnAll.style.background = '#0284c7'; }};
-                        btnAll.onclick = (e) => {{
-                            e.stopPropagation();
-                            const curUrl = new URL(pWin.location.href);
-                            curUrl.searchParams.set('nav', 'Reports');
-                            curUrl.searchParams.set('t3_all', '1');
-                            pWin.location.href = curUrl.toString();
-                        }};
-                        footer.appendChild(btnAll);
-                    }} else {{
-                        const btnToday = pDoc.createElement('button');
-                        btnToday.type = 'button';
-                        btnToday.innerText = 'Hôm nay';
-                        btnToday.style.cssText = 'flex:1;padding:6px 10px;font-size:12px;font-weight:600;background:#0284c7;color:#ffffff;border:none;border-radius:6px;cursor:pointer;transition:all 0.15s ease;';
-                        btnToday.onmouseover = () => {{ btnToday.style.background = '#0369a1'; }};
-                        btnToday.onmouseout = () => {{ btnToday.style.background = '#0284c7'; }};
-                        btnToday.onclick = (e) => {{
-                            e.stopPropagation();
-                            const cells = cal.querySelectorAll('div[role="gridcell"]');
-                            let clicked = false;
-                            for (let cell of cells) {{
-                                if (cell.innerText.trim() === "{today_day}" && !cell.getAttribute('aria-disabled')) {{
-                                    cell.click();
-                                    clicked = true;
-                                    break;
-                                }}
-                            }}
-                            if (!clicked) {{
-                                const curUrl = new URL(pWin.location.href);
-                                curUrl.searchParams.set('date', "{today_str}");
-                                pWin.location.href = curUrl.toString();
-                            }}
-                        }};
-
-                        const btnYest = pDoc.createElement('button');
-                        btnYest.type = 'button';
-                        btnYest.innerText = 'Hôm qua';
-                        btnYest.style.cssText = 'flex:1;padding:6px 10px;font-size:12px;font-weight:600;background:{tab_active_bg};color:{text_main};border:1px solid {border_col};border-radius:6px;cursor:pointer;transition:all 0.15s ease;';
-                        btnYest.onmouseover = () => {{ btnYest.style.background = 'rgba(2, 132, 199, 0.2)'; }};
-                        btnYest.onmouseout = () => {{ btnYest.style.background = '{tab_active_bg}'; }};
-                        btnYest.onclick = (e) => {{
-                            e.stopPropagation();
-                            const cells = cal.querySelectorAll('div[role="gridcell"]');
-                            let clicked = false;
-                            for (let cell of cells) {{
-                                if (cell.innerText.trim() === "{yesterday_day}" && !cell.getAttribute('aria-disabled')) {{
-                                    cell.click();
-                                    clicked = true;
-                                    break;
-                                }}
-                            }}
-                            if (!clicked) {{
-                                const curUrl = new URL(pWin.location.href);
-                                curUrl.searchParams.set('date', "{yesterday_str}");
-                                pWin.location.href = curUrl.toString();
-                            }}
-                        }};
-
-                        footer.appendChild(btnToday);
-                        footer.appendChild(btnYest);
-                    }}
-                    cal.appendChild(footer);
-                }}
-            }});
-        }}
-
-        setInterval(fixCalendarFooter, 300);
-
-        // 1. Cuộn mượt về đầu trang ngay khi chuyển tab
-        const curNavChoice = {json.dumps(nav_choice)};
-        if (pWin.__scc_cur_nav && pWin.__scc_cur_nav !== curNavChoice) {{
-            pWin.scrollTo({{ top: 0, behavior: 'instant' }});
-            try {{
-                const mainArea = pDoc.querySelector('.main .block-container') || pDoc.documentElement;
-                if (mainArea) mainArea.scrollTop = 0;
-            }} catch(e) {{}}
-        }}
-        pWin.__scc_cur_nav = curNavChoice;
-
-        // 2. Kích hoạt auto-refresh phi khối (Non-blocking timer) chỉ khi ở Dashboard trực tiếp
-        const shouldAutoRefresh = {json.dumps(bool(nav_choice == "Dashboard" and is_realtime_mode and not is_today_finished and not st.session_state.get("active_investigation_bucket")))};
-
-        if (pWin.__scc_refresh_timer) {{
-            clearTimeout(pWin.__scc_refresh_timer);
-            pWin.__scc_refresh_timer = null;
-        }}
-
-        if (shouldAutoRefresh) {{
-            pWin.__scc_refresh_timer = setTimeout(() => {{
-                const btns = pDoc.querySelectorAll('button');
-                for (let b of btns) {{
-                    if (b.innerText && b.innerText.includes('SCC_AUTO_REFRESH_TRIGGER')) {{
-                        b.click();
-                        break;
-                    }}
-                }}
-            }}, 3500);
-        }}
-
-        // 3. Đảm bảo ẩn tuyệt đối nút trigger trên DOM
-        function hideHiddenTrigger() {{
-            const btns = pDoc.querySelectorAll('button');
-            for (let b of btns) {{
-                if (b.innerText && b.innerText.includes('SCC_AUTO_REFRESH_TRIGGER')) {{
-                    const c = b.closest('div[data-testid="stButton"]') || b.closest('.element-container') || b;
-                    c.style.display = 'none';
-                    c.style.height = '0px';
-                    c.style.visibility = 'hidden';
-                }}
-            }}
-        }}
-        hideHiddenTrigger();
-        setInterval(hideHiddenTrigger, 100);
-    }})();
-    </script>
-    """, height=0, width=0)
 
     # --------------------------------------------------------------------------
     # MAIN HEADER: BREADCRUMB & THEME CONTROLLER
@@ -1199,12 +1893,127 @@ def render_live_monitoring_fragment():
 
     st.markdown(f"<hr style='margin: 8px 0 14px 0; border:none; border-top:1px solid {border_col};'>", unsafe_allow_html=True)
 
+    # Chèn công cụ hỗ trợ tự động gắn nút tiện ích vào chân popup Lịch (Hôm nay, Hôm qua trên Dashboard và Tổng Hợp trên Reports)
+    components.html(f"""
+    <script>
+    (function() {{
+        const pDoc = window.parent.document;
+        const pWin = window.parent;
+        pWin.__scc_cur_nav = "{nav_choice}";
+        pWin.__scc_today_str = "{max_date.strftime('%Y-%m-%d')}";
+        pWin.__scc_yest_str = "{yesterday_date.strftime('%Y-%m-%d')}";
+        pWin.__scc_today_day = "{max_date.day}";
+        pWin.__scc_yest_day = "{yesterday_date.day}";
+
+        function fixCalendarFooter() {{
+            const currentNav = pWin.__scc_cur_nav || "{nav_choice}";
+            const todayStr = pWin.__scc_today_str;
+            const yestStr = pWin.__scc_yest_str;
+            const todayDay = pWin.__scc_today_day;
+            const yestDay = pWin.__scc_yest_day;
+
+            const popovers = pDoc.querySelectorAll('div[data-baseweb="popover"]');
+            popovers.forEach(popover => {{
+                const cal = popover.querySelector('div[data-baseweb="calendar"]');
+                if (!cal) return;
+
+                const existingFooter = popover.querySelector('.custom-cal-footer');
+                if (currentNav === "Reports") {{
+                    if (existingFooter && !existingFooter.dataset.tab3) {{
+                        existingFooter.remove();
+                    }}
+                    if (!popover.querySelector('.custom-cal-footer[data-tab3="true"]')) {{
+                        const footer = pDoc.createElement('div');
+                        footer.className = 'custom-cal-footer';
+                        footer.dataset.tab3 = 'true';
+                        footer.style.cssText = 'display:flex;gap:8px;padding:8px 12px;border-top:1px solid {border_col};background:{card_bg};border-radius:0 0 10px 10px;margin-top:4px;';
+
+                        const btnAll = pDoc.createElement('button');
+                        btnAll.innerText = '📊 Tổng Hợp Toàn Bộ';
+                        btnAll.style.cssText = 'flex:1;padding:7px 12px;font-size:12.5px;font-weight:600;background:#0284c7;color:#ffffff;border:none;border-radius:6px;cursor:pointer;';
+                        btnAll.onclick = (e) => {{
+                            e.stopPropagation();
+                            const curUrl = new URL(pWin.location.href);
+                            curUrl.searchParams.set('t3_all', '1');
+                            pWin.location.href = curUrl.toString();
+                        }};
+                        footer.appendChild(btnAll);
+                        cal.appendChild(footer);
+                    }}
+                }} else if (currentNav === "Live Operations") {{
+                    if (existingFooter && existingFooter.dataset.tab3) {{
+                        existingFooter.remove();
+                    }}
+                    if (!popover.querySelector('.custom-cal-footer:not([data-tab3="true"])')) {{
+                        const footer = pDoc.createElement('div');
+                        footer.className = 'custom-cal-footer';
+                        footer.style.cssText = 'display:flex;gap:8px;padding:8px 12px;border-top:1px solid {border_col};background:{card_bg};border-radius:0 0 10px 10px;margin-top:4px;';
+
+                        const btnToday = pDoc.createElement('button');
+                        btnToday.innerText = '⚡ Hôm nay';
+                        btnToday.style.cssText = 'flex:1;padding:7px 10px;font-size:12px;font-weight:600;background:#0284c7;color:#ffffff;border:none;border-radius:6px;cursor:pointer;';
+                        btnToday.onclick = (e) => {{
+                            e.stopPropagation();
+                            const cells = cal.querySelectorAll('div[role="gridcell"]');
+                            for (let cell of cells) {{
+                                if (cell.innerText.trim() === todayDay && !cell.getAttribute('aria-disabled')) {{
+                                    cell.click();
+                                    return;
+                                }}
+                            }}
+                            const inp = pDoc.querySelector('div[data-testid="stDateInput"] input');
+                            if (inp) {{
+                                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                                setter.call(inp, todayStr);
+                                inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            }}
+                        }};
+
+                        const btnYest = pDoc.createElement('button');
+                        btnYest.innerText = '⏮️ Hôm qua';
+                        btnYest.style.cssText = 'flex:1;padding:7px 10px;font-size:12px;font-weight:600;background:{"#1e293b" if is_dark else "#f1f5f9"};color:{text_main};border:1px solid {border_col};border-radius:6px;cursor:pointer;';
+                        btnYest.onclick = (e) => {{
+                            e.stopPropagation();
+                            const cells = cal.querySelectorAll('div[role="gridcell"]');
+                            for (let cell of cells) {{
+                                if (cell.innerText.trim() === yestDay && !cell.getAttribute('aria-disabled')) {{
+                                    cell.click();
+                                    return;
+                                }}
+                            }}
+                            const inp = pDoc.querySelector('div[data-testid="stDateInput"] input');
+                            if (inp) {{
+                                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                                setter.call(inp, yestStr);
+                                inp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            }}
+                        }};
+
+                        footer.appendChild(btnToday);
+                        footer.appendChild(btnYest);
+                        cal.appendChild(footer);
+                    }}
+                }}
+            }});
+        }}
+
+        if (pWin.__scc_cal_interval_id) {{
+            clearInterval(pWin.__scc_cal_interval_id);
+        }}
+        // Avoid a tight DOM polling loop that causes visible flicker on every
+        // Streamlit rerun. The calendar footer does not need 12.5fps polling.
+        pWin.__scc_cal_interval_id = setInterval(fixCalendarFooter, 500);
+    }})();
+    </script>
+    """, height=0, width=0)
+
     # ==============================================================================
     # 1. VIEW: DASHBOARD (GIỮ NGUYÊN 100% TAB 1 GỐC + BỘ LỌC LỊCH GỌN GÀNG TRONG TAB)
     # ==============================================================================
-    if nav_choice == "Dashboard":
-        # BỘ LỌC LỊCH DUY NHẤT & GỌN GÀNG (KHÔNG CÒN NÚT THỪA NGOÀI LỊCH, KHÔNG CÒN TIẾN ĐỘ CA TRỰC)
-        col_dash_date, _ = st.columns([1.6, 3.4])
+    if nav_choice == "Live Operations":
+        col_dash_date, _ = st.columns([1.5, 2.5])
         with col_dash_date:
             cur_cal_val = st.session_state.get("cal_date_picker", max_date)
             if hasattr(cur_cal_val, "date"):
@@ -1212,21 +2021,26 @@ def render_live_monitoring_fragment():
             if cur_cal_val < min_date or cur_cal_val > max_date:
                 cur_cal_val = max_date
 
-            new_dash_date = st.date_input(
-                "Ngày Giám Sát:",
+            if "_ui_dash_date_input" not in st.session_state or st.session_state.get("_ui_dash_date_input") != cur_cal_val:
+                st.session_state["_ui_dash_date_input"] = cur_cal_val
+
+            def _on_dash_date_picked():
+                picked = st.session_state.get("_ui_dash_date_input")
+                if hasattr(picked, "date"):
+                    picked = picked.date()
+                st.session_state["cal_date_picker"] = picked
+                st.session_state["is_following_live"] = (picked == max_date)
+
+            st.date_input(
+                "Chọn ngày theo Lịch:",
                 value=cur_cal_val,
                 min_value=min_date,
                 max_value=max_date,
                 format="YYYY-MM-DD",
-                key="dash_date_input",
-                help="Nhấn để chọn ngày trên lịch. Sử dụng phím tắt Hôm nay / Hôm qua ở đáy lịch."
+                key="_ui_dash_date_input",
+                on_change=_on_dash_date_picked,
+                help="Bấm vào để mở lịch. Trong lịch có nút Hôm nay và Hôm qua để chọn nhanh."
             )
-            if hasattr(new_dash_date, "date"):
-                new_dash_date = new_dash_date.date()
-            if new_dash_date != picked_date:
-                st.session_state["cal_date_picker"] = new_dash_date
-                st.session_state["is_following_live"] = (new_dash_date == max_date)
-                st.rerun()
 
         st.markdown("<div style='margin-bottom:12px;'></div>", unsafe_allow_html=True)
 
@@ -1248,6 +2062,27 @@ def render_live_monitoring_fragment():
             """, unsafe_allow_html=True)
 
         st.markdown("<div style='margin-bottom:14px;'></div>", unsafe_allow_html=True)
+
+        # Production NOC: trạng thái và hàng đợi sự cố phải xuất hiện trước biểu đồ.
+        # Người trực ca cần biết lỗi gì, phạm vi nào và ảnh hưởng ra sao mà không phải
+        # kéo xuống cuối trang để tìm nhật ký.
+        render_operational_status_banner(
+            view_date=view_date,
+            is_live=is_realtime_mode,
+            flagged=flagged,
+            text_main=text_main,
+            text_muted=text_muted,
+            card_bg=card_bg,
+            border_col=border_col,
+        )
+        render_incident_queue(
+            flagged=flagged,
+            text_main=text_main,
+            text_muted=text_muted,
+            card_bg=card_bg,
+            border_col=border_col,
+        )
+        st.markdown("<div style='margin:16px 0 8px 0;'></div>", unsafe_allow_html=True)
 
         # ---------------- 2 BIỂU ĐỒ SONG SONG GỐC (CHART 1 & CHART 2) ----------------
         fig_traffic = go.Figure()
@@ -1304,6 +2139,7 @@ def render_live_monitoring_fragment():
         max_calls_val = peak_val * 1.30
 
         fig_traffic.update_layout(
+            uirevision=True,
             template=plotly_template, paper_bgcolor=card_bg, plot_bgcolor=card_bg,
             height=430, margin=dict(l=45, r=20, t=65, b=35), hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="center", x=0.5, font=dict(size=11, color=text_main)),
@@ -1346,6 +2182,7 @@ def render_live_monitoring_fragment():
                 max_err_display = min(120.0, peak_err * 1.30)
 
         fig_error.update_layout(
+            uirevision=True,
             template=plotly_template, paper_bgcolor=card_bg, plot_bgcolor=card_bg,
             height=430, margin=dict(l=45, r=20, t=65, b=35), hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.06, xanchor="center", x=0.5, font=dict(size=11, color=text_main)),
@@ -1356,10 +2193,10 @@ def render_live_monitoring_fragment():
         col_c1, col_c2 = st.columns(2)
         with col_c1:
             st.markdown(f"<div style='font-size:13.5px; font-weight:700; color:{text_main}; margin-bottom:8px;'>1. Lưu Lượng Cuộc Gọi Phát Sinh So Với Mức Kỳ Vọng Thông Thường</div>", unsafe_allow_html=True)
-            st.plotly_chart(fig_traffic, use_container_width=True)
+            st.plotly_chart(fig_traffic, use_container_width=True, config={"displayModeBar": False, "responsive": True})
         with col_c2:
             st.markdown(f"<div style='font-size:13.5px; font-weight:700; color:{text_main}; margin-bottom:8px;'>2. Tỷ Lệ Cuộc Gọi Bị Gián Đoạn So Với Ngưỡng An Toàn Tự Co Giãn</div>", unsafe_allow_html=True)
-            st.plotly_chart(fig_error, use_container_width=True)
+            st.plotly_chart(fig_error, use_container_width=True, config={"displayModeBar": False, "responsive": True})
 
         st.markdown("---")
 
@@ -1493,7 +2330,18 @@ def render_live_monitoring_fragment():
     # ==============================================================================
     # 2. VIEW: ANALYSIS (GIỮ NGUYÊN 100% TAB 2 GỐC + MA TRẬN NHIỆT RỦI RO HOURLY HEATMAP)
     # ==============================================================================
-    elif nav_choice == "Analysis":
+    elif nav_choice == "Incidents":
+        render_incident_investigation(
+            view_date=view_date,
+            full_df=full_df,
+            flagged=flagged,
+            text_main=text_main,
+            text_muted=text_muted,
+            card_bg=card_bg,
+            border_col=border_col,
+        )
+
+    elif nav_choice == "Analytics":
         completed_today_slice = completed_buckets if is_realtime_mode else None
         dyn_hourly_stats, tot_hist_days, tot_hist_buckets = compute_dynamic_seasonality_and_risk(
             past_days_ts, completed_today_slice
@@ -1654,11 +2502,15 @@ def render_live_monitoring_fragment():
     # 3. VIEW: REPORTS (GIỮ NGUYÊN 100% TAB 3 GỐC + CARRIER SCORECARD ĐỐI SOÁT NHÀ MẠNG)
     # ==============================================================================
     elif nav_choice == "Reports":
+        if "t3_all" in st.query_params:
+            st.session_state["t3_date_range_picker"] = (min_date, max_date)
+            del st.query_params["t3_all"]
+
         all_dates = sorted(full_df["date"].unique()) if not full_df.empty else []
 
         st.markdown("### Báo Cáo Tổng Hợp Vận Hành (Executive Operational Summary)")
 
-        col_t3_date, _ = st.columns([1.6, 2.4])
+        col_t3_date, _ = st.columns([1.5, 2.5])
         with col_t3_date:
             def get_work_week(day_obj):
                 if hasattr(day_obj, "date"): day_obj = day_obj.date()
@@ -1671,17 +2523,26 @@ def render_live_monitoring_fragment():
             if isinstance(raw_session_t3, (list, tuple)):
                 if len(raw_session_t3) == 1:
                     s_d, e_d = get_work_week(raw_session_t3[0])
+                    st.session_state["t3_date_range_picker"] = (s_d, e_d)
                     t3_val = (s_d, e_d)
                 elif len(raw_session_t3) == 2:
                     v_start, v_end = raw_session_t3[0], raw_session_t3[1]
                     if hasattr(v_start, "date"): v_start = v_start.date()
                     if hasattr(v_end, "date"): v_end = v_end.date()
                     if v_start > v_end: v_start, v_end = v_end, v_start
-                    t3_val = (max(min_date, v_start), min(max_date, v_end))
+                    if v_start == min_date and v_end == max_date:
+                        t3_val = (min_date, max_date)
+                    elif v_start == v_end or (v_end - v_start).days <= 6:
+                        s_d, e_d = get_work_week(v_start)
+                        st.session_state["t3_date_range_picker"] = (s_d, e_d)
+                        t3_val = (s_d, e_d)
+                    else:
+                        t3_val = (max(min_date, v_start), min(max_date, v_end))
                 else:
                     t3_val = t3_range_default
             else:
                 s_d, e_d = get_work_week(raw_session_t3)
+                st.session_state["t3_date_range_picker"] = (s_d, e_d)
                 t3_val = (s_d, e_d)
 
             t3_range_picked = st.date_input(
@@ -1691,12 +2552,17 @@ def render_live_monitoring_fragment():
                 max_value=max_date,
                 format="YYYY-MM-DD",
                 key="t3_date_range_picker",
-                help="Bấm vào ngày bất kỳ để chọn tuần làm việc đó, hoặc bấm nút 'Tổng Hợp Toàn Bộ' dưới chân lịch để xem toàn bộ."
+                help="Bấm vào ngày bất kỳ trong tuần để tự động chọn và đối soát trọn vẹn tuần làm việc đó (Thứ 2 – Thứ 6), hoặc bấm nút 'Tổng Hợp Toàn Bộ' dưới chân lịch để xem toàn bộ."
             )
 
         if isinstance(t3_range_picked, (list, tuple)):
             if len(t3_range_picked) == 2:
-                t3_start_d, t3_end_d = t3_range_picked[0], t3_range_picked[1]
+                if t3_range_picked[0] == min_date and t3_range_picked[1] == max_date:
+                    t3_start_d, t3_end_d = min_date, max_date
+                elif t3_range_picked[0] == t3_range_picked[1] or (t3_range_picked[1] - t3_range_picked[0]).days <= 6:
+                    t3_start_d, t3_end_d = get_work_week(t3_range_picked[0])
+                else:
+                    t3_start_d, t3_end_d = t3_range_picked[0], t3_range_picked[1]
             elif len(t3_range_picked) == 1:
                 t3_start_d, t3_end_d = get_work_week(t3_range_picked[0])
             else:
@@ -1715,7 +2581,7 @@ def render_live_monitoring_fragment():
         if is_view_all_active:
             st.caption(f"Đang đối soát: **Toàn bộ dữ liệu vận hành ({min_date.strftime('%d/%m/%Y')} ➔ {max_date.strftime('%d/%m/%Y')})** — Gồm {len(filtered_dates)} ngày làm việc ({tot_all_calls:,} cuộc gọi).")
         else:
-            st.caption(f"Đang đối soát: **{t3_start_d.strftime('%d/%m/%Y')} ➔ {t3_end_d.strftime('%d/%m/%Y')}** (Thứ 2 – Thứ 6) — Gồm {len(filtered_dates)} ngày làm việc ({tot_all_calls:,} cuộc gọi).")
+            st.caption(f"Đang đối soát: **Tuần làm việc {t3_start_d.strftime('%d/%m/%Y')} ➔ {t3_end_d.strftime('%d/%m/%Y')}** (Thứ 2 – Thứ 6, trừ T7 & CN) — Gồm {len(filtered_dates)} ngày làm việc ({tot_all_calls:,} cuộc gọi).")
 
         tot_all_503 = int((df_t3["result_code"] == "503_CONGESTION").sum()) if not df_t3.empty else 0
         tot_all_ans = int((df_t3["result_code"] == "ANSWERED").sum()) if not df_t3.empty else 0
@@ -1966,7 +2832,7 @@ def render_live_monitoring_fragment():
     # ==============================================================================
     # 4. VIEW: SYSTEM (ĐO LƯỜNG HẠ TẦNG & TRẠNG THÁI DUAL-WRITE)
     # ==============================================================================
-    elif nav_choice == "System":
+    elif nav_choice == "System Health":
         st.markdown(f"<div style='font-size:13px; font-weight:600; color:{text_muted}; margin-bottom:14px;'>Đo lường hạ tầng kỹ thuật: Trạng thái ghi song song 2 Database PostgreSQL (Dual-Write), Redis Stream và Telegram Webhook.</div>", unsafe_allow_html=True)
 
         telemetry = get_system_telemetry()
@@ -2053,4 +2919,3 @@ def render_live_monitoring_fragment():
 
 # KÍCH HOẠT HIỂN THỊ
 is_day_done = render_live_monitoring_fragment()
-

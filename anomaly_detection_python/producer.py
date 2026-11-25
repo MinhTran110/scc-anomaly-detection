@@ -126,15 +126,25 @@ def run_continuous_producer(bucket_delay_seconds: float = 3.5):
             shutil.copyfile(SEED_FILE, STREAM_FILE)
             print("🌱 Đã nạp dữ liệu nền tảng ban đầu từ seed_historical_stream.csv")
 
-    # Nạp dữ liệu lịch sử ban đầu vào PostgreSQL nếu có
+    # Nạp dữ liệu lịch sử ban đầu vào PostgreSQL chỉ khi DB chính còn rỗng.
+    # Không backfill lại hàng trăm nghìn dòng sau mỗi lần producer restart.
     try:
         if STREAM_FILE.exists():
-            init_df = pd.read_csv(STREAM_FILE)
-            if not init_df.empty:
-                n_synced = db_writer.save_calls_batch(init_df.to_dict("records"))
-                db_writer.sync_timeseries_aggregation()
-                if n_synced > 0:
-                    print(f"🐘 [PostgreSQL Init] Đã đồng bộ {n_synced:,} cuộc gọi ban đầu vào Database.")
+            primary_conn = db_writer.get_connection()
+            existing_rows = 0
+            if primary_conn and primary_conn.closed == 0:
+                with primary_conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) FROM public.calls_stream;")
+                    existing_rows = int(cur.fetchone()[0] or 0)
+            if existing_rows == 0:
+                init_df = pd.read_csv(STREAM_FILE)
+                if not init_df.empty:
+                    n_synced = db_writer.save_calls_batch(init_df.to_dict("records"))
+                    db_writer.sync_timeseries_aggregation()
+                    if n_synced > 0:
+                        print(f"🐘 [PostgreSQL Init] Đã đồng bộ {n_synced:,} cuộc gọi ban đầu vào Database.")
+            else:
+                print(f"⏭️ [PostgreSQL Init] Bỏ qua backfill: DB1 đã có {existing_rows:,} cuộc gọi.")
     except Exception as e:
         print(f"⚠️ [PostgreSQL Init] Lỗi nạp dữ liệu khởi động: {e}")
 
@@ -174,12 +184,14 @@ def run_continuous_producer(bucket_delay_seconds: float = 3.5):
                     next_day = get_next_business_day(last_date)
                     sim_date = datetime(next_day.year, next_day.month, next_day.day, 8, 0, 0)
                     start_bucket_idx = 0
-                    past_records = df_buf.drop(columns=["date"]).to_dict("records")
+                    # Lịch sử đã tồn tại trong STREAM_FILE; không chuyển toàn bộ
+                    # lịch sử thành list-of-dicts vì sẽ làm producer phình RAM.
+                    past_records = []
                 else:
                     # Tiếp tục ngày đang dở
                     sim_date = datetime(last_date.year, last_date.month, last_date.day, 8, 0, 0)
                     start_bucket_idx = max(0, len(last_buckets) - 1)
-                    past_records = df_buf[df_buf["date"] < last_date].drop(columns=["date"]).to_dict("records")
+                    past_records = []
                     today_records = df_last.drop(columns=["date"]).to_dict("records")
         except Exception as e:
             print(f"⚠️ Lỗi đọc buffer ({e}), khởi tạo lại ngày mặc định 2026-10-08...")
@@ -313,10 +325,31 @@ def run_continuous_producer(bucket_delay_seconds: float = 3.5):
                 "result_code": "ANSWERED",
                 "carrier": "VIETTEL"
             }
-            all_records = past_records + today_records + [dummy_lead]
+            # Append incremental: file đã chứa lịch sử, chỉ ghi records mới của
+            # bucket hiện tại. Cách cũ rewrite toàn bộ lịch sử mỗi bucket và
+            # tạo một peak memory rất lớn khi buffer vượt hàng trăm nghìn dòng.
+            new_records = bucket_calls + [dummy_lead]
+            # Keep the existing CSV schema when appending. The buffer contains
+            # campaign/customer/employee columns from the seed; appending a
+            # shorter six-column row would shift start_time into the wrong
+            # column and corrupt every subsequent dashboard read.
+            buffer_columns = [
+                "call_id", "start_time", "end_time", "duration", "result_code", "carrier",
+                "campaign_id", "customer_id", "employee_id",
+            ]
+            normalized_records = []
+            for record in new_records:
+                normalized_records.append({
+                    column: record.get(column, "")
+                    for column in buffer_columns
+                })
             tmp_file = DATA_DIR / "stream_buffer.tmp"
-            pd.DataFrame(all_records).to_csv(tmp_file, index=False)
-            tmp_file.replace(STREAM_FILE)
+            pd.DataFrame(normalized_records, columns=buffer_columns).to_csv(
+                STREAM_FILE,
+                mode="a",
+                header=not STREAM_FILE.exists() or STREAM_FILE.stat().st_size < 100,
+                index=False,
+            )
 
             # Đồng bộ tổng hợp 15 phút vào bảng call_timeseries của PostgreSQL
             db_writer.sync_timeseries_aggregation()
