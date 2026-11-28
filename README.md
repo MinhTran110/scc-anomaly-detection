@@ -207,3 +207,11 @@ docker exec -it scc_dashboard python3 anomaly_detection_python/daily_reporter.py
 - **Dự án:** SCC Outbound Time-Series Pipeline & Real-Time Anomaly Detection
 - **Phiên bản:** `v3.2.2` (Production NOC Release)
 - **Giấy phép:** [MIT License](LICENSE)
+
+---
+
+## Documentation
+
+### Development Guide
+
+- [Git Workflow Guide](docs/GIT_WORKFLOW.md) – Branching, commits, pushing changes, and pull request guidelines.
